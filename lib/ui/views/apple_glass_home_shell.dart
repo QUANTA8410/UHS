@@ -324,21 +324,23 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
                 ),
                 child: Stack(
                   children: [
-                    IsometricHouse3DWidget(
-                      height: 285,
-                      layout: _houseLayout,
-                      selectedRoomId: _selectedRoom == 'All' ? 'all' : _selectedRoom.toLowerCase(),
-                      onRoomSelected: (r) => setState(() =>
-                          _selectedRoom = r == 'all' ? 'All' : (r[0].toUpperCase() + r.substring(1))),
-                      onFixtureLongPress: (fix, dev) {
-                        if (dev != null) _showDeviceControlSheet(context, dev);
-                      },
-                      onOpenBlueprintEditor: () async {
-                        final updated = await FloorPlanEditorSheet.show(context, layout: _houseLayout);
-                        if (updated != null) {
-                          setState(() => _houseLayout = updated);
-                        }
-                      },
+                    RepaintBoundary(
+                      child: IsometricHouse3DWidget(
+                        height: 285,
+                        layout: _houseLayout,
+                        selectedRoomId: _selectedRoom == 'All' ? 'all' : _selectedRoom.toLowerCase(),
+                        onRoomSelected: (r) => setState(() =>
+                            _selectedRoom = r == 'all' ? 'All' : (r[0].toUpperCase() + r.substring(1))),
+                        onFixtureLongPress: (fix, dev) {
+                          if (dev != null) _showDeviceControlSheet(context, dev);
+                        },
+                        onOpenBlueprintEditor: () async {
+                          final updated = await FloorPlanEditorSheet.show(context, layout: _houseLayout);
+                          if (updated != null) {
+                            setState(() => _houseLayout = updated);
+                          }
+                        },
+                      ),
                     ),
                     Positioned(
                       top: 12,
@@ -464,24 +466,26 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
                   final dev = filteredDevices[index];
                   final inFlight = home.networkEngine.isDeviceInFlight(dev.id);
 
-                  return UniversalAnimatedGlassCard(
-                    device: dev,
-                    isSyncing: inFlight,
-                    onTap: () => _showDeviceControlSheet(context, dev),
-                    onPowerToggle: () async {
-                      HapticFeedback.mediumImpact();
-                      try {
-                        await home.toggleDevicePower(dev);
-                      } catch (e) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Hardware Error: $e')),
-                          );
+                  return RepaintBoundary(
+                    child: UniversalAnimatedGlassCard(
+                      device: dev,
+                      isSyncing: inFlight,
+                      onTap: () => _showDeviceControlSheet(context, dev),
+                      onPowerToggle: () async {
+                        HapticFeedback.mediumImpact();
+                        try {
+                          await home.toggleDevicePower(dev);
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Hardware Error: $e')),
+                            );
+                          }
                         }
-                      }
-                    },
-                    onLongPress: () => _showDeviceControlSheet(context, dev),
-                    onHorizontalLevelDrag: (val) => home.setDeviceLevel(dev, val),
+                      },
+                      onLongPress: () => _showDeviceControlSheet(context, dev),
+                      onHorizontalLevelDrag: (val) => home.setDeviceLevel(dev, val),
+                    ),
                   );
                 },
                 childCount: filteredDevices.length,
@@ -766,34 +770,36 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
       children: [
         // 1. Full-Screen 3D Isometric Dollhouse Canvas
         Positioned.fill(
-          child: IsometricHouse3DWidget(
-            key: _houseKey,
-            layout: _layout,
-            selectedRoomId: _selectedRoomId,
-            height: 500,
-            onRoomSelected: (roomId) {
-              setState(() => _selectedRoomId = roomId);
-            },
-            onFixtureTap: (fixture, linkedDevice) async {
-              if (linkedDevice != null) {
-                HapticFeedback.heavyImpact();
-                try {
-                  await home.toggleDevicePower(linkedDevice);
-                } catch (e) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error: $e')),
-                    );
+          child: RepaintBoundary(
+            child: IsometricHouse3DWidget(
+              key: _houseKey,
+              layout: _layout,
+              selectedRoomId: _selectedRoomId,
+              height: 500,
+              onRoomSelected: (roomId) {
+                setState(() => _selectedRoomId = roomId);
+              },
+              onFixtureTap: (fixture, linkedDevice) async {
+                if (linkedDevice != null) {
+                  HapticFeedback.heavyImpact();
+                  try {
+                    await home.toggleDevicePower(linkedDevice);
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Error: $e')),
+                      );
+                    }
                   }
                 }
-              }
-            },
-            onFixtureLongPress: (fixture, linkedDevice) {
-              if (linkedDevice != null) {
-                _showDeviceControlSheet(context, linkedDevice);
-              }
-            },
-            onOpenBlueprintEditor: _openBlueprintStudio,
+              },
+              onFixtureLongPress: (fixture, linkedDevice) {
+                if (linkedDevice != null) {
+                  _showDeviceControlSheet(context, linkedDevice);
+                }
+              },
+              onOpenBlueprintEditor: _openBlueprintStudio,
+            ),
           ),
         ),
 

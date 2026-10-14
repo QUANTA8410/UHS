@@ -24,7 +24,7 @@ class CameraCockpitSheet extends StatefulWidget {
 }
 
 class _CameraCockpitSheetState extends State<CameraCockpitSheet>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _scanController;
   String? _ptzStatus;
 
@@ -35,6 +35,7 @@ class _CameraCockpitSheetState extends State<CameraCockpitSheet>
   bool _isBuffering = false;
   bool _isMuted = true;
   bool _useSubStream = false;
+  bool _isDisposed = false;
   String? _playerError;
   String? _streamTelemetry;
 
@@ -46,6 +47,7 @@ class _CameraCockpitSheetState extends State<CameraCockpitSheet>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scanController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 4),
@@ -180,13 +182,35 @@ class _CameraCockpitSheetState extends State<CameraCockpitSheet>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDisposed || _player == null) return;
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      try {
+        _player?.pause();
+      } catch (_) {}
+    } else if (state == AppLifecycleState.resumed && mounted && widget.device.isOn) {
+      try {
+        _player?.play();
+      } catch (_) {}
+    }
+  }
+
+  @override
   void dispose() {
+    if (_isDisposed) return;
+    _isDisposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     _scanController.dispose();
     _playingSub?.cancel();
     _bufferingSub?.cancel();
     _errorSub?.cancel();
     _videoParamsSub?.cancel();
-    _player?.dispose();
+    try {
+      _player?.stop();
+    } catch (_) {}
+    try {
+      _player?.dispose();
+    } catch (_) {}
     super.dispose();
   }
 

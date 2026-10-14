@@ -186,19 +186,22 @@ class NetworkDiscoveryService {
 
   Future<void> _probePort(String host, int port, String name, String manufacturer) async {
     try {
-      final socket = await Socket.connect(host, port, timeout: const Duration(milliseconds: 300));
-      socket.destroy();
-      _cachedDevices.add(
-        DiscoveredDevice(
-          id: 'lan_${host.replaceAll('.', '_')}_$port',
-          name: name,
-          host: host,
-          port: port,
-          serviceType: '_lan._tcp',
-          manufacturer: manufacturer,
-          metadata: {'ip': host, 'port': '$port'},
-        ),
-      );
+      final socket = await Socket.connect(host, port, timeout: const Duration(milliseconds: 350));
+      try {
+        _cachedDevices.add(
+          DiscoveredDevice(
+            id: 'lan_${host.replaceAll('.', '_')}_$port',
+            name: name,
+            host: host,
+            port: port,
+            serviceType: '_lan._tcp',
+            manufacturer: manufacturer,
+            metadata: {'ip': host, 'port': '$port'},
+          ),
+        );
+      } finally {
+        socket.destroy();
+      }
     } catch (_) {}
   }
 }

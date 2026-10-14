@@ -22,6 +22,9 @@ class SmartAutomationRule {
   double? targetLevel;
   DateTime? lastTriggeredAt;
 
+  DateTime? get lastExecutedAt => lastTriggeredAt;
+  set lastExecutedAt(DateTime? dt) => lastTriggeredAt = dt;
+
   SmartAutomationRule({
     required this.id,
     required this.name,
@@ -74,6 +77,8 @@ class RealHomeProvider extends ChangeNotifier {
   final List<MultiConditionAutomationRule> _multiConditionRules = [];
   final Map<String, String> _lastWasherMachineState = {};
   Timer? _pollingTimer;
+  bool _isPollingInFlight = false;
+  final Map<String, Timer> _levelDebounceTimers = {};
   bool isBusy = false;
   String? lastGlobalError;
 
@@ -150,6 +155,10 @@ class RealHomeProvider extends ChangeNotifier {
   void dispose() {
     _isDisposed = true;
     _pollingTimer?.cancel();
+    for (final timer in _levelDebounceTimers.values) {
+      timer.cancel();
+    }
+    _levelDebounceTimers.clear();
     reflexBus.dispose();
     nodeServer.stopServer();
     nodeServer.dispose();
@@ -680,26 +689,29 @@ class RealHomeProvider extends ChangeNotifier {
   // REAL HARDWARE EXECUTION WITH OPTIMISTIC ROLLBACK & CROSS-BRAND REFLEXES
   // ---------------------------------------------------------------------------
   Future<void> toggleDevicePower(RealSmartDevice device) async {
-    final targetState = !device.isOn;
+    final previousState = device.isOn;
+    final targetState = !previousState;
     lastGlobalError = null;
 
-    await networkEngine.executeWithOptimisticRollback<bool>(
-      device: device,
-      optimisticValue: targetState,
-      getCurrentValue: () => device.isOn,
-      applyValueLocal: (val) {
-        device.isOn = val;
-        _controller.computeDeviceLiveWattage(device);
-      },
-      notifyUi: notifyListeners,
-      networkCall: () async {
-        if (device.credentials['vendor'] == 'lg_thinq') {
-          await zeroTouch.controlLgAirConditioner(device: device, powerOn: targetState);
-        } else {
-          await _controller.setPower(device, targetState);
-        }
-      },
-    );
+    // Optimistic toggle with instant UI feedback
+    device.isOn = targetState;
+    _controller.computeDeviceLiveWattage(device);
+    notifyListeners();
+
+    try {
+      if (device.credentials['vendor'] == 'lg_thinq') {
+        await zeroTouch.controlLgAirConditioner(device: device, powerOn: targetState);
+      } else {
+        await _controller.setPower(device, targetState);
+      }
+    } catch (e) {
+      // Revert on network/controller failure
+      device.isOn = previousState;
+      _controller.computeDeviceLiveWattage(device);
+      lastGlobalError = e.toString().replaceAll('Exception: ', '');
+      notifyListeners();
+      rethrow;
+    }
 
     await _saveState();
 
@@ -745,27 +757,33 @@ class RealHomeProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> setDevicePrimaryLevel(RealSmartDevice device, double newValue) =>
+      setDeviceLevel(device, newValue);
+
   Future<void> setDeviceLevel(RealSmartDevice device, double newValue) async {
     lastGlobalError = null;
-    await networkEngine.executeWithOptimisticRollback<double>(
-      device: device,
-      optimisticValue: newValue,
-      getCurrentValue: () => device.primaryValue,
-      applyValueLocal: (val) {
-        device.primaryValue = val;
-        _controller.computeDeviceLiveWattage(device);
-      },
-      notifyUi: notifyListeners,
-      networkCall: () async {
+    // Optimistic instant slider response for smooth 60/120fps tracking
+    device.primaryValue = newValue;
+    device.isOn = newValue > 0;
+    _controller.computeDeviceLiveWattage(device);
+    notifyListeners();
+
+    // 250ms debouncer to avoid flooding IoT hardware with socket requests
+    _levelDebounceTimers[device.id]?.cancel();
+    _levelDebounceTimers[device.id] = Timer(const Duration(milliseconds: 250), () async {
+      try {
         if (device.credentials['vendor'] == 'lg_thinq' && device.category == 'ac') {
           await zeroTouch.controlLgAirConditioner(device: device, targetCelsius: newValue);
         } else {
           await _controller.setPrimaryLevel(device, newValue);
         }
-      },
-    );
-    await _saveState();
-    notifyListeners();
+        await _saveState();
+      } catch (e) {
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+      } finally {
+        notifyListeners();
+      }
+    });
   }
 
   // NFC & Deep-Link Execution Handler:
@@ -799,13 +817,21 @@ class RealHomeProvider extends ChangeNotifier {
   }
 
   Future<void> syncAllDevicesSilent() async {
-    for (final dev in _devices) {
-      try {
-        await _controller.refreshDeviceStatus(dev);
-        await _checkWasherStateChange(dev);
-      } catch (_) {
-        _controller.computeDeviceLiveWattage(dev);
-      }
+    if (_isPollingInFlight) return;
+    try {
+      _isPollingInFlight = true;
+      await Future.wait(
+        _devices.map((dev) async {
+          try {
+            await _controller.refreshDeviceStatus(dev).timeout(const Duration(seconds: 3));
+            await _checkWasherStateChange(dev);
+          } catch (_) {
+            _controller.computeDeviceLiveWattage(dev);
+          }
+        }),
+      );
+    } finally {
+      _isPollingInFlight = false;
     }
 
     // Real-Time Energy Accumulator (Riemann sum integration: ΔE = P_total * Δt)
@@ -991,10 +1017,14 @@ class RealHomeProvider extends ChangeNotifier {
   }
 
   Future<void> _evaluateDeviceStateAutomations(RealSmartDevice changedDevice) async {
+    final now = DateTime.now();
     final stateKey = '${changedDevice.id}:${changedDevice.isOn ? "on" : "off"}';
     for (final rule in _automations) {
-      if (rule.isEnabled &&
-          rule.triggerType == 'device_state' &&
+      if (!rule.isEnabled) continue;
+      if (rule.lastTriggeredAt != null && now.difference(rule.lastTriggeredAt!).inSeconds < 45) {
+        continue;
+      }
+      if (rule.triggerType == 'device_state' &&
           rule.triggerValue == stateKey) {
         try {
           await executeAutomationRuleNow(rule);
@@ -1037,14 +1067,13 @@ class RealHomeProvider extends ChangeNotifier {
 
     for (final rule in _automations) {
       if (!rule.isEnabled || rule.triggerType != 'time') continue;
+      if (rule.lastTriggeredAt != null && now.difference(rule.lastTriggeredAt!).inSeconds < 45) {
+        continue;
+      }
       if (rule.triggerValue == currentHm) {
-        final alreadyRanThisMinute = rule.lastTriggeredAt != null &&
-            now.difference(rule.lastTriggeredAt!).inSeconds < 65;
-        if (!alreadyRanThisMinute) {
-          try {
-            await executeAutomationRuleNow(rule);
-          } catch (_) {}
-        }
+        try {
+          await executeAutomationRuleNow(rule);
+        } catch (_) {}
       }
     }
 

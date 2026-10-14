@@ -553,7 +553,7 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
       } catch (_) {}
 
       final portsToProbe = [554, 8554, 8000];
-      const batchSize = 35;
+      const batchSize = 25;
       for (int i = 1; i <= 254; i += batchSize) {
         final batch = <Future<void>>[];
         for (int j = i; j < i + batchSize && j <= 254; j++) {
@@ -561,10 +561,13 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
           batch.add(() async {
             for (final port in portsToProbe) {
               try {
-                final s = await Socket.connect(host, port, timeout: const Duration(milliseconds: 300));
-                await s.close();
-                discovered.add(host);
-                break;
+                final s = await Socket.connect(host, port, timeout: const Duration(milliseconds: 350));
+                try {
+                  discovered.add(host);
+                  break;
+                } finally {
+                  s.destroy();
+                }
               } catch (_) {}
             }
           }());
@@ -659,7 +662,7 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
       } catch (_) {}
 
       final portsToProbe = [554, 8554, 80, 8080];
-      const batchSize = 35;
+      const batchSize = 25;
       for (int i = 1; i <= 254; i += batchSize) {
         final batch = <Future<void>>[];
         for (int j = i; j < i + batchSize && j <= 254; j++) {
@@ -667,10 +670,13 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
           batch.add(() async {
             for (final port in portsToProbe) {
               try {
-                final s = await Socket.connect(host, port, timeout: const Duration(milliseconds: 300));
-                await s.close();
-                discovered.add(host);
-                break;
+                final s = await Socket.connect(host, port, timeout: const Duration(milliseconds: 350));
+                try {
+                  discovered.add(host);
+                  break;
+                } finally {
+                  s.destroy();
+                }
               } catch (_) {}
             }
           }());

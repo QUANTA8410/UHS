@@ -622,13 +622,19 @@ class RealIotController {
     bool reachable = false;
     try {
       final s = await Socket.connect(cleanIp, cleanPort, timeout: const Duration(seconds: 3));
-      await s.close();
-      reachable = true;
+      try {
+        reachable = true;
+      } finally {
+        s.destroy();
+      }
     } catch (_) {
       try {
         final s80 = await Socket.connect(cleanIp, 80, timeout: const Duration(seconds: 2));
-        await s80.close();
-        reachable = true;
+        try {
+          reachable = true;
+        } finally {
+          s80.destroy();
+        }
       } catch (_) {}
     }
 
@@ -799,8 +805,11 @@ class RealIotController {
             ) ??
             8008;
         final socket = await Socket.connect(ip, port, timeout: const Duration(seconds: 3));
-        await socket.close();
-        device.isOnline = true;
+        try {
+          device.isOnline = true;
+        } finally {
+          socket.destroy();
+        }
         break;
 
       case ConnectionProtocol.customHttpWebhook:
@@ -970,15 +979,21 @@ class RealIotController {
         final port = int.tryParse(device.credentials['port'] ?? '554') ?? 554;
         try {
           final s = await Socket.connect(ip, port, timeout: const Duration(seconds: 2));
-          await s.close();
-          device.isOnline = true;
-          device.lastError = null;
+          try {
+            device.isOnline = true;
+            device.lastError = null;
+          } finally {
+            s.destroy();
+          }
         } catch (_) {
           try {
             final s80 = await Socket.connect(ip, 80, timeout: const Duration(seconds: 2));
-            await s80.close();
-            device.isOnline = true;
-            device.lastError = null;
+            try {
+              device.isOnline = true;
+              device.lastError = null;
+            } finally {
+              s80.destroy();
+            }
           } catch (_) {
             device.isOnline = false;
           }
@@ -1798,33 +1813,44 @@ class RealIotController {
         '${base}150',
       ];
 
-      for (final ip in candidateIps) {
-        if (seenIps.contains(ip)) continue;
-        try {
-          final s = await Socket.connect(ip, 6668, timeout: const Duration(milliseconds: 250));
-          await s.close();
-          final id = 'wipro_${ip.replaceAll('.', '_')}';
-          detected.add(
-            RealSmartDevice(
-              id: id,
-              name: 'Wipro Smart Next Bulb ($ip)',
-              room: 'Living Room',
-              category: 'light',
-              protocol: ConnectionProtocol.tuyaLocalLan,
-              credentials: {
-                'ip': ip,
-                'port': '6668',
-                'devId': id,
-                'localKey': 'auto_detected_lan',
-              },
-              isOn: true,
-              isOnline: true,
-              primaryValue: 80.0,
-              ratedMaxWatts: 9.0,
-            ),
-          );
-          seenIps.add(ip);
-        } catch (_) {}
+      const chunkSize = 25;
+      for (int i = 0; i < candidateIps.length; i += chunkSize) {
+        final chunk = candidateIps.sublist(
+          i,
+          (i + chunkSize > candidateIps.length) ? candidateIps.length : i + chunkSize,
+        );
+        final batch = chunk.map((ip) async {
+          if (seenIps.contains(ip)) return;
+          try {
+            final s = await Socket.connect(ip, 6668, timeout: const Duration(milliseconds: 350));
+            try {
+              final id = 'wipro_${ip.replaceAll('.', '_')}';
+              detected.add(
+                RealSmartDevice(
+                  id: id,
+                  name: 'Wipro Smart Next Bulb ($ip)',
+                  room: 'Living Room',
+                  category: 'light',
+                  protocol: ConnectionProtocol.tuyaLocalLan,
+                  credentials: {
+                    'ip': ip,
+                    'port': '6668',
+                    'devId': id,
+                    'localKey': 'auto_detected_lan',
+                  },
+                  isOn: true,
+                  isOnline: true,
+                  primaryValue: 80.0,
+                  ratedMaxWatts: 9.0,
+                ),
+              );
+              seenIps.add(ip);
+            } finally {
+              s.destroy();
+            }
+          } catch (_) {}
+        });
+        await Future.wait(batch);
       }
     }
 
