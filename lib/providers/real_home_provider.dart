@@ -10,6 +10,7 @@ import '../services/master/zero_touch_onboarding_service.dart';
 import '../services/node/embedded_android_node_server.dart';
 import '../services/notifications/appliance_notification_bridge.dart';
 import '../services/real_iot_controller.dart';
+import '../services/smartthings/smartthings_laundry_service.dart';
 
 class SmartAutomationRule {
   final String id;
@@ -74,6 +75,7 @@ class RealHomeProvider extends ChangeNotifier {
   final List<RealSmartDevice> _devices = [];
   final List<SmartAutomationRule> _automations = [];
   final SmartAutomationEngine smartEngine = SmartAutomationEngine();
+  final SmartThingsLaundryService laundryService = SmartThingsLaundryService();
   final List<MultiConditionAutomationRule> _multiConditionRules = [];
   final Map<String, String> _lastWasherMachineState = {};
   Timer? _pollingTimer;
@@ -86,6 +88,11 @@ class RealHomeProvider extends ChangeNotifier {
   DateTime? _lastEnergySampleTime;
 
   List<RealSmartDevice> get devices => List.unmodifiable(_devices);
+  List<RealSmartDevice> get allDevices => devices;
+  List<String> get rooms => _devices.map((d) => d.room).toSet().toList();
+  List<RealSmartDevice> devicesInRoom(String room) => _devices.where((d) => d.room == room).toList();
+  int get activeLightsCount => _devices.where((d) => d.category == 'light' && d.isOn).length;
+  int get activeAppliancesCount => _devices.where((d) => d.category != 'light' && d.isOn).length;
   List<SmartAutomationRule> get automations => List.unmodifiable(_automations);
   List<MultiConditionAutomationRule> get multiConditionRules =>
       List.unmodifiable(_multiConditionRules);
@@ -165,6 +172,13 @@ class RealHomeProvider extends ChangeNotifier {
     super.dispose();
   }
 
+  @override
+  void notifyListeners() {
+    if (!_isDisposed) {
+      super.notifyListeners();
+    }
+  }
+
   Future<void> _checkPresenceAutomations() async {
     final transition = await osBridge.checkPresenceTransition();
     if (transition != null) {
@@ -213,7 +227,7 @@ class RealHomeProvider extends ChangeNotifier {
     if (_isDisposed) return;
 
     try {
-      final devRaw = prefs.getString('real_devices_v2');
+      final devRaw = prefs.getString('unified_home_paired_devices_v4') ?? prefs.getString('real_devices_v2');
       if (devRaw != null && devRaw.isNotEmpty) {
         final decoded = jsonDecode(devRaw);
         if (decoded is List) {
@@ -237,15 +251,28 @@ class RealHomeProvider extends ChangeNotifier {
         }
       }
     } catch (e) {
-      debugPrint('Error loading real_devices_v2: $e');
+      debugPrint('Error loading saved devices: $e');
     }
 
-    linkedSmartThingsPat = prefs.getString('linked_st_pat_token');
-    linkedLgThinqPat = prefs.getString('linked_lg_pat_token');
-    linkedHomeAssistantHubUrl = prefs.getString('linked_ha_hub_url');
-    linkedHomeAssistantToken = prefs.getString('linked_ha_token');
-    linkedHueBridgeIp = prefs.getString('linked_hue_bridge_ip');
-    linkedHueUsername = prefs.getString('linked_hue_username');
+    final tokenJson = prefs.getString('unified_home_brand_tokens_v4');
+    if (tokenJson != null && tokenJson.isNotEmpty) {
+      try {
+        final Map<String, dynamic> tokens = jsonDecode(tokenJson);
+        linkedSmartThingsPat = tokens['st_pat']?.toString();
+        linkedLgThinqPat = tokens['lg_pat']?.toString();
+        linkedHomeAssistantHubUrl = tokens['ha_hub_url']?.toString();
+        linkedHomeAssistantToken = tokens['ha_token']?.toString();
+        linkedHueBridgeIp = tokens['hue_bridge_ip']?.toString();
+        linkedHueUsername = tokens['hue_username']?.toString();
+      } catch (_) {}
+    }
+
+    linkedSmartThingsPat ??= prefs.getString('linked_st_pat_token');
+    linkedLgThinqPat ??= prefs.getString('linked_lg_pat_token');
+    linkedHomeAssistantHubUrl ??= prefs.getString('linked_ha_hub_url');
+    linkedHomeAssistantToken ??= prefs.getString('linked_ha_token');
+    linkedHueBridgeIp ??= prefs.getString('linked_hue_bridge_ip');
+    linkedHueUsername ??= prefs.getString('linked_hue_username');
 
     try {
       final autoRaw = prefs.getString('real_automations_v2');
@@ -299,10 +326,9 @@ class RealHomeProvider extends ChangeNotifier {
   Future<void> _saveState() async {
     final prefs = await SharedPreferences.getInstance();
     if (_devices.isNotEmpty || _hasExplicitlyClearedDevices) {
-      await prefs.setString(
-        'real_devices_v2',
-        jsonEncode(_devices.map((d) => d.toJson()).toList()),
-      );
+      final jsonDevices = jsonEncode(_devices.map((d) => d.toJson()).toList());
+      await prefs.setString('unified_home_paired_devices_v4', jsonDevices);
+      await prefs.setString('real_devices_v2', jsonDevices);
     }
     await prefs.setString(
       'real_automations_v2',
@@ -316,30 +342,144 @@ class RealHomeProvider extends ChangeNotifier {
       'automation_execution_logs_v1',
       jsonEncode(smartEngine.executionLogs.take(50).map((l) => l.toJson()).toList()),
     );
+
+    final brandTokens = <String, String>{};
     if (linkedSmartThingsPat != null) {
+      brandTokens['st_pat'] = linkedSmartThingsPat!;
       await prefs.setString('linked_st_pat_token', linkedSmartThingsPat!);
     }
     if (linkedLgThinqPat != null) {
+      brandTokens['lg_pat'] = linkedLgThinqPat!;
       await prefs.setString('linked_lg_pat_token', linkedLgThinqPat!);
     }
     if (linkedHomeAssistantHubUrl != null) {
+      brandTokens['ha_hub_url'] = linkedHomeAssistantHubUrl!;
       await prefs.setString('linked_ha_hub_url', linkedHomeAssistantHubUrl!);
     }
     if (linkedHomeAssistantToken != null) {
+      brandTokens['ha_token'] = linkedHomeAssistantToken!;
       await prefs.setString('linked_ha_token', linkedHomeAssistantToken!);
     }
     if (linkedHueBridgeIp != null) {
+      brandTokens['hue_bridge_ip'] = linkedHueBridgeIp!;
       await prefs.setString('linked_hue_bridge_ip', linkedHueBridgeIp!);
     }
     if (linkedHueUsername != null) {
+      brandTokens['hue_username'] = linkedHueUsername!;
       await prefs.setString('linked_hue_username', linkedHueUsername!);
     }
+    await prefs.setString('unified_home_brand_tokens_v4', jsonEncode(brandTokens));
+
     if (osBridge.homeRouterBssid != null) {
       await prefs.setString('home_router_bssid', osBridge.homeRouterBssid!);
     }
     final todayStr = '${DateTime.now().year}-${DateTime.now().month}-${DateTime.now().day}';
     await prefs.setString('energy_date_ymd', todayStr);
     await prefs.setDouble('energy_today_kwh', todayAccumulatedKwh);
+  }
+
+  Future<void> togglePower(String id) async {
+    final match = _devices.where((d) => d.id == id);
+    if (match.isNotEmpty) {
+      await toggleDevicePower(match.first);
+    }
+  }
+
+  Future<void> updateDevice(RealSmartDevice dev) async {
+    final idx = _devices.indexWhere((d) => d.id == dev.id);
+    if (idx != -1) {
+      _devices[idx] = dev;
+      await _saveState();
+      notifyListeners();
+    }
+  }
+
+  Future<void> addDevice(RealSmartDevice dev) async => addDirectLanDevice(dev);
+
+  void updateWasher(String id, {String? cycle, int? waterTemp, String? spinSpeed, bool? steam}) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx != -1) {
+      final dev = _devices[idx];
+      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+      if (cycle != null) attrs['cycle'] = cycle;
+      if (waterTemp != null) attrs['waterTemperature'] = waterTemp;
+      if (spinSpeed != null) attrs['spinSpeed'] = spinSpeed;
+      if (steam != null) attrs['steam'] = steam;
+      dev.liveAttributes = attrs;
+      _saveState();
+      notifyListeners();
+    }
+  }
+
+  void updateSamsungWasher(
+    String id, {
+    String? cycle,
+    int? waterTemp,
+    String? spinSpeed,
+    bool? ecoBubble,
+    bool? superSpeed,
+    bool? aiWash,
+    bool? addWashDoorLocked,
+    String? recommendedRecipe,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx != -1) {
+      final dev = _devices[idx];
+      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+      if (cycle != null) attrs['cycle'] = cycle;
+      if (waterTemp != null) attrs['waterTemperature'] = waterTemp;
+      if (spinSpeed != null) attrs['spinSpeed'] = spinSpeed;
+      if (ecoBubble != null) attrs['ecoBubble'] = ecoBubble;
+      if (superSpeed != null) attrs['superSpeed'] = superSpeed;
+      if (aiWash != null) attrs['aiWash'] = aiWash;
+      if (addWashDoorLocked != null) attrs['addWashDoorLocked'] = addWashDoorLocked;
+      if (recommendedRecipe != null) attrs['recommendedRecipe'] = recommendedRecipe;
+      dev.liveAttributes = attrs;
+      _saveState();
+      notifyListeners();
+    }
+  }
+
+  void updateTv(String id, {String? app, int? volume, String? pictureMode}) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx != -1) {
+      final dev = _devices[idx];
+      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+      if (app != null) attrs['currentApp'] = app;
+      if (volume != null) attrs['volume'] = volume;
+      if (pictureMode != null) attrs['pictureMode'] = pictureMode;
+      dev.liveAttributes = attrs;
+      _saveState();
+      notifyListeners();
+    }
+  }
+
+  void updateWiproBulb(String id, {double? brightness, Color? color, int? colorTempKelvin, String? scene, bool? musicSync}) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx != -1) {
+      final dev = _devices[idx];
+      if (brightness != null) dev.primaryValue = (brightness * 100.0).clamp(0.0, 100.0);
+      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+      if (scene != null) attrs['activeScene'] = scene;
+      if (musicSync != null) attrs['musicSync'] = musicSync;
+      dev.liveAttributes = attrs;
+      _saveState();
+      notifyListeners();
+    }
+  }
+
+  void updateLgAc(String id, {double? targetTemp, String? fanSpeed, bool? jetCool}) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx != -1) {
+      final dev = _devices[idx];
+      if (targetTemp != null) dev.primaryValue = targetTemp;
+      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+      if (fanSpeed != null) attrs['fanSpeed'] = fanSpeed;
+      if (jetCool != null) attrs['jetCool'] = jetCool;
+      dev.liveAttributes = attrs;
+      _saveState();
+      notifyListeners();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -619,6 +759,7 @@ class RealHomeProvider extends ChangeNotifier {
     _devices.clear();
     _hasExplicitlyClearedDevices = true;
     final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('unified_home_paired_devices_v4', '[]');
     await prefs.setString('real_devices_v2', '[]');
     await _saveState();
     notifyListeners();

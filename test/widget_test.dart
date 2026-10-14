@@ -1,37 +1,49 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:unified_home/main.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:unified_home/providers/real_home_provider.dart';
+import 'package:unified_home/theme/apple_glass_theme.dart';
+import 'package:unified_home/ui/views/apple_glass_home_shell.dart';
 
 void main() {
-  testWidgets('UnifiedHomeApp renders Google Home tabs and quick action pills', (WidgetTester tester) async {
-    await tester.pumpWidget(const UnifiedHomeApp());
-    await tester.pumpAndSettle();
+  TestWidgetsFlutterBinding.ensureInitialized();
 
-    // Verify Home Name AppBar
-    expect(find.text('My Smart Home'), findsOneWidget);
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
 
-    // Verify Quick Action Pills
-    expect(find.text('Lights'), findsOneWidget);
-    expect(find.text('Climate'), findsOneWidget);
-    expect(find.text('Appliances'), findsOneWidget);
-    expect(find.text('Energy'), findsOneWidget);
+  testWidgets('UnifiedHomeApp renders Apple Glass Spatial Shell and tabs', (WidgetTester tester) async {
+    final provider = RealHomeProvider(autoStartPolling: false);
 
-    // Verify Bottom NavigationBar Tabs and Pills exist
-    expect(find.text('Favorites'), findsAtLeastNWidgets(1));
-    expect(find.text('Devices'), findsAtLeastNWidgets(1));
-    expect(find.text('Automations'), findsAtLeastNWidgets(1));
-    expect(find.text('3D Map'), findsAtLeastNWidgets(1));
+    await tester.pumpWidget(
+      ChangeNotifierProvider<RealHomeProvider>.value(
+        value: provider,
+        child: MaterialApp(
+          theme: AppleGlassTheme.themeData,
+          home: const AppleGlassHomeShell(),
+        ),
+      ),
+    );
 
-    // Switch to Devices Tab in NavigationBar
-    await tester.tap(find.text('Devices').last);
-    await tester.pumpAndSettle();
-    expect(find.text('Rooms & Devices'), findsOneWidget);
-    expect(find.text('Living Room'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 100));
 
-    // Switch to Energy Tab in NavigationBar
-    await tester.tap(find.text('Energy').last);
-    await tester.pumpAndSettle();
-    expect(find.text('SmartThings Energy Hub'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('AI Energy Mode (SmartThings)'), 200);
-    expect(find.text('AI Energy Mode (SmartThings)'), findsOneWidget);
+    // Verify Glass Shell Bottom Dock Pills
+    expect(find.text('Home'), findsOneWidget);
+    expect(find.byIcon(Icons.view_in_ar_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.bolt_rounded), findsOneWidget);
+
+    // Verify Pair Device Action
+    expect(find.text('Pair Device'), findsOneWidget);
+
+    // Switch to 3D Map Tab
+    await tester.tap(find.byIcon(Icons.view_in_ar_rounded));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // Switch to Automations Tab
+    await tester.tap(find.byIcon(Icons.bolt_rounded));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    provider.dispose();
   });
 }

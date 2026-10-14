@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../../providers/home_state.dart';
+import '../../../providers/real_home_provider.dart';
 import '../../../services/ai/ai_home_copilot_service.dart';
 
 class AiCopilotSheet extends StatefulWidget {
@@ -44,7 +44,7 @@ class _AiCopilotSheetState extends State<AiCopilotSheet> {
     ));
   }
 
-  void _sendMessage(String text, HomeState state) {
+  void _sendMessage(String text, RealHomeProvider state) {
     if (text.trim().isEmpty) return;
 
     setState(() {
@@ -62,7 +62,7 @@ class _AiCopilotSheetState extends State<AiCopilotSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<HomeState>();
+    final state = context.watch<RealHomeProvider>();
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),

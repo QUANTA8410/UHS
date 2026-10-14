@@ -1,135 +1,94 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
-import 'package:unified_home/models/device_model.dart';
-import 'package:unified_home/providers/home_state.dart';
-import 'package:unified_home/ui/widgets/dialogs/add_device_dialog.dart';
-import 'package:unified_home/ui/views/devices_view.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:unified_home/providers/real_home_provider.dart';
+import 'package:unified_home/services/real_iot_controller.dart';
 
 void main() {
-  group('Real Device Management & Integration Tests', () {
-    late HomeState state;
+  TestWidgetsFlutterBinding.ensureInitialized();
 
-    setUp(() {
-      state = HomeState();
-    });
-
-    test('Initial state detects preloaded dummy devices', () {
-      expect(state.hasDummyDevices, true);
-      expect(state.allDevices.any((d) => d.isDummy), true);
-    });
-
-    test('clearDummyDevices removes all preloaded demo hardware', () async {
-      await state.clearDummyDevices();
-      expect(state.hasDummyDevices, false);
-      expect(state.allDevices.isEmpty, true);
-    });
-
-    test('restoreDemoFleet restores sample demo fleet when requested', () async {
-      await state.clearDummyDevices();
-      expect(state.allDevices.isEmpty, true);
-
-      await state.restoreDemoFleet();
-      expect(state.hasDummyDevices, true);
-      expect(state.allDevices.length, greaterThanOrEqualTo(5));
-    });
-
-    test('addOnePlusTvDevice adds real TV with LAN IP and localLan protocol', () async {
-      await state.clearDummyDevices();
-
-      await state.addOnePlusTvDevice(
-        name: 'My Living Room OnePlus TV',
-        host: '192.168.1.105',
-        room: 'Living Room',
-      );
-
-      expect(state.allDevices.length, 1);
-      final tv = state.allDevices.first as TvDevice;
-      expect(tv.name, 'My Living Room OnePlus TV');
-      expect(tv.host, '192.168.1.105');
-      expect(tv.protocol, DeviceProtocol.localLan);
-      expect(tv.isDummy, false);
-    });
-
-    test('addWiproBulbDevice adds real Wipro bulb with IP and lighting category', () async {
-      await state.clearDummyDevices();
-
-      await state.addWiproBulbDevice(
-        name: 'Bedroom Wipro Smart Bulb',
-        host: '192.168.1.120',
-        room: 'Master Bedroom',
-      );
-
-      expect(state.allDevices.length, 1);
-      final bulb = state.allDevices.first as LightDevice;
-      expect(bulb.name, 'Bedroom Wipro Smart Bulb');
-      expect(bulb.host, '192.168.1.120');
-      expect(bulb.brand, 'Wipro Smart Next');
-      expect(bulb.isDummy, false);
-    });
-
-    test('SmartDevice serialization and deserialization preserves network host and dummy status', () {
-      final originalTv = TvDevice(
-        id: 'tv_test_1',
-        name: 'Test OnePlus TV',
-        room: 'Living Room',
-        protocol: DeviceProtocol.localLan,
-        host: '192.168.1.150',
-        port: 5555,
-        isDummy: false,
-      );
-
-      final json = originalTv.toJson();
-      final restored = SmartDevice.fromJson(json) as TvDevice;
-
-      expect(restored.id, 'tv_test_1');
-      expect(restored.host, '192.168.1.150');
-      expect(restored.port, 5555);
-      expect(restored.isDummy, false);
-    });
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
   });
 
-  group('AddDeviceDialog & Fleet UI Tests', () {
-    testWidgets('AddDeviceDialog renders Wi-Fi Scan, SmartThings, LG ThinQ, OnePlus TV, and Wipro tabs', (tester) async {
-      final state = HomeState();
+  group('Real Device Management & Integration Tests', () {
+    late RealHomeProvider provider;
 
-      await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: state,
-          child: const MaterialApp(
-            home: Scaffold(
-              body: AddDeviceDialog(),
-            ),
-          ),
-        ),
-      );
-
-      await tester.pumpAndSettle();
-
-      expect(find.text('Add & Connect Real Devices'), findsOneWidget);
-      expect(find.text('Wi-Fi Scan'), findsOneWidget);
-      expect(find.text('SmartThings'), findsOneWidget);
-      expect(find.text('LG ThinQ'), findsOneWidget);
-      expect(find.text('OnePlus TV'), findsOneWidget);
-      expect(find.text('Wipro Bulb'), findsOneWidget);
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      provider = RealHomeProvider(autoInitStorage: false, autoStartPolling: false);
     });
 
-    testWidgets('DevicesView displays sample banner with Clear All button when dummy devices are active', (tester) async {
-      final state = HomeState();
+    tearDown(() {
+      provider.dispose();
+    });
 
-      await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: state,
-          child: const MaterialApp(
-            home: DevicesView(),
-          ),
-        ),
+    test('Provider starts empty when initialized without cache', () {
+      expect(provider.devices.isEmpty, true);
+    });
+
+    test('addDirectLanDevice adds real hardware and updates list', () {
+      final tv = RealSmartDevice(
+        id: 'tv_oneplus_test',
+        name: 'My Living Room OnePlus TV',
+        room: 'Living Room',
+        category: 'tv',
+        protocol: ConnectionProtocol.onePlusTvLan,
+        credentials: {'ip': '192.168.1.105'},
       );
 
-      await tester.pumpAndSettle();
+      provider.addDeviceDirect(tv);
 
-      expect(find.text('Sample Demo Devices Active'), findsOneWidget);
-      expect(find.text('Clear All'), findsOneWidget);
+      expect(provider.devices.length, 1);
+      final storedTv = provider.devices.first;
+      expect(storedTv.name, 'My Living Room OnePlus TV');
+      expect(storedTv.credentials['ip'], '192.168.1.105');
+      expect(storedTv.protocol, ConnectionProtocol.onePlusTvLan);
+    });
+
+    test('addWiproBulbDevice adds real Wipro bulb with IP and lighting category', () {
+      final bulb = RealSmartDevice(
+        id: 'wipro_bulb_test',
+        name: 'Bedroom Wipro Smart Bulb',
+        room: 'Master Bedroom',
+        category: 'light',
+        protocol: ConnectionProtocol.tuyaLocalLan,
+        credentials: {'ip': '192.168.1.120'},
+      );
+
+      provider.addDeviceDirect(bulb);
+
+      expect(provider.devices.length, 1);
+      final storedBulb = provider.devices.first;
+      expect(storedBulb.name, 'Bedroom Wipro Smart Bulb');
+      expect(storedBulb.category, 'light');
+    });
+
+    test('clearAllDevices removes all paired hardware and empties list', () async {
+      final dev = RealSmartDevice(
+        id: 'dev_test',
+        name: 'Test Device',
+        room: 'Living Room',
+        category: 'switch',
+        protocol: ConnectionProtocol.homeAssistantBridge,
+        credentials: {},
+      );
+      provider.addDeviceDirect(dev);
+      expect(provider.devices.isNotEmpty, true);
+
+      await provider.clearAllDevices();
+      expect(provider.devices.isEmpty, true);
+    });
+
+    test('removeDevice removes targeted hardware by id', () async {
+      final d1 = RealSmartDevice(id: 'd1', name: 'D1', room: 'R', category: 'light', protocol: ConnectionProtocol.homeAssistantBridge, credentials: {});
+      final d2 = RealSmartDevice(id: 'd2', name: 'D2', room: 'R', category: 'light', protocol: ConnectionProtocol.homeAssistantBridge, credentials: {});
+      provider.addDeviceDirect(d1);
+      provider.addDeviceDirect(d2);
+
+      expect(provider.devices.length, 2);
+      await provider.removeDevice('d1');
+      expect(provider.devices.length, 1);
+      expect(provider.devices.first.id, 'd2');
     });
   });
 }

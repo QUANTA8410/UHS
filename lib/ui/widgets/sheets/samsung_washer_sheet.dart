@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../../models/device_model.dart';
-import '../../../providers/home_state.dart';
+import '../../../providers/real_home_provider.dart';
+import '../../../services/real_iot_controller.dart';
 import '../../../services/smartthings/smartthings_laundry_service.dart';
 
 class SamsungWasherSheet extends StatefulWidget {
-  final WasherDevice device;
+  final RealSmartDevice device;
 
   const SamsungWasherSheet({super.key, required this.device});
 
@@ -18,7 +18,7 @@ class _SamsungWasherSheetState extends State<SamsungWasherSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<HomeState>();
+    final state = context.watch<RealHomeProvider>();
     final washer = widget.device;
     final homeCare = state.laundryService.checkHomeCareStatus(
       drumCleanCount: washer.drumCleanCount,
@@ -114,7 +114,7 @@ class _SamsungWasherSheetState extends State<SamsungWasherSheet> {
                     child: Text(
                       washer.isDummy
                           ? 'Demo Preview Mode • Connect Samsung PAT to control real washer'
-                          : 'Live SmartThings Cloud • Device ID: ${washer.cloudDeviceId ?? washer.id}',
+                          : 'Live SmartThings Cloud • Device ID: ${washer.cloudDeviceId}',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -144,7 +144,7 @@ class _SamsungWasherSheetState extends State<SamsungWasherSheet> {
                         children: [
                           Text(washer.selectedCycle, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                           Text(
-                            washer.stage == WasherStage.wash
+                            (washer.isOn && washer.statusSummary.toLowerCase().contains('wash'))
                                 ? 'EcoBubble™ active • Sensing fabric weight'
                                 : washer.statusSummary,
                             style: TextStyle(fontSize: 12, color: Colors.grey.shade700),

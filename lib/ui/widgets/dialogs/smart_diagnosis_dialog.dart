@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
-import '../../../models/device_model.dart';
+import 'package:provider/provider.dart';
+import '../../../providers/real_home_provider.dart';
 import '../../../services/diagnostics/smart_diagnosis_service.dart';
+import '../../../services/real_iot_controller.dart';
 
 class SmartDiagnosisDialog extends StatefulWidget {
-  final WasherDevice washer;
+  final RealSmartDevice device;
 
-  const SmartDiagnosisDialog({super.key, required this.washer});
+  const SmartDiagnosisDialog({super.key, required this.device});
 
-  static Future<void> show(BuildContext context, WasherDevice washer) {
+  static Future<void> show(BuildContext context, RealSmartDevice device) {
     return showDialog(
       context: context,
-      builder: (ctx) => SmartDiagnosisDialog(washer: washer),
+      builder: (ctx) => SmartDiagnosisDialog(device: device),
     );
   }
 
@@ -27,7 +29,7 @@ class _SmartDiagnosisDialogState extends State<SmartDiagnosisDialog> {
   @override
   void initState() {
     super.initState();
-    _executeDiagnosis();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _executeDiagnosis());
   }
 
   Future<void> _executeDiagnosis({String? faultCode}) async {
@@ -36,8 +38,15 @@ class _SmartDiagnosisDialogState extends State<SmartDiagnosisDialog> {
       _simulatedFault = faultCode;
     });
 
+    List<RealSmartDevice> allDevices = const [];
+    try {
+      allDevices = context.read<RealHomeProvider>().devices;
+    } catch (_) {}
+
     final report = await _service.runDiagnosis(
-      deviceId: widget.washer.id,
+      deviceId: widget.device.id,
+      device: widget.device,
+      allDevices: allDevices,
       simulatedFaultCode: faultCode,
     );
 

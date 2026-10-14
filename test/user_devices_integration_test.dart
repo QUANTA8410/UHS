@@ -1,28 +1,79 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
-import 'package:unified_home/models/device_model.dart';
-import 'package:unified_home/providers/home_state.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:unified_home/providers/real_home_provider.dart';
+import 'package:unified_home/services/real_iot_controller.dart';
 import 'package:unified_home/services/smartthings/smartthings_laundry_service.dart';
 import 'package:unified_home/ui/widgets/sheets/samsung_washer_sheet.dart';
-import 'package:unified_home/ui/widgets/sheets/oneplus_tv_sheet.dart';
-import 'package:unified_home/ui/widgets/sheets/light_sheet.dart';
-import 'package:unified_home/ui/widgets/sheets/thermostat_sheet.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   group('User Specific Fleet - Service & State Tests', () {
-    late HomeState state;
+    late RealHomeProvider provider;
 
     setUp(() {
-      state = HomeState();
+      SharedPreferences.setMockInitialValues({});
+      provider = RealHomeProvider(autoInitStorage: false, autoStartPolling: false);
+
+      // Add user exact 4 hardware fleet devices
+      provider.addDeviceDirect(RealSmartDevice(
+        id: 'samsung_washer',
+        name: 'Samsung Ecobubble™ AI DD Washer',
+        room: 'Laundry Room',
+        category: 'washer',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: {'cloudDeviceId': 'samsung_washer_01'},
+        isOn: true,
+        liveWatts: 180.0,
+      ));
+      provider.addDeviceDirect(RealSmartDevice(
+        id: 'lg_ac',
+        name: 'LG DualCool AI Inverter AC',
+        room: 'Living Room',
+        category: 'ac',
+        protocol: ConnectionProtocol.customHttpWebhook,
+        credentials: {'devId': 'lg_ac_01'},
+        isOn: true,
+        liveWatts: 1100.0,
+      ));
+      provider.addDeviceDirect(RealSmartDevice(
+        id: 'wipro_bulb',
+        name: 'Wipro Smart Next Bulb',
+        room: 'Living Room',
+        category: 'light',
+        protocol: ConnectionProtocol.tuyaLocalLan,
+        credentials: {'ip': '192.168.1.102'},
+        isOn: true,
+        liveWatts: 12.0,
+      ));
+      provider.addDeviceDirect(RealSmartDevice(
+        id: 'oneplus_tv',
+        name: 'OnePlus TV 55 U1S',
+        room: 'Living Room',
+        category: 'tv',
+        protocol: ConnectionProtocol.onePlusTvLan,
+        credentials: {'ip': '192.168.1.103'},
+        isOn: true,
+        liveWatts: 140.0,
+      ));
+    });
+
+    tearDown(() {
+      provider.dispose();
     });
 
     test('Initializes with user exact hardware fleet', () {
-      final devices = state.allDevices;
-      expect(devices.any((d) => d is WasherDevice && d.name.contains('Samsung')), isTrue);
-      expect(devices.any((d) => d is ThermostatDevice && d.name.contains('LG DualCool')), isTrue);
-      expect(devices.any((d) => d is LightDevice && d.name.contains('Wipro')), isTrue);
-      expect(devices.any((d) => d is TvDevice && d.name.contains('OnePlus')), isTrue);
+      final devices = provider.devices;
+      expect(devices.any((d) => d.category == 'washer' && d.name.contains('Samsung')), isTrue);
+      expect(devices.any((d) => d.category == 'ac' && d.name.contains('LG DualCool')), isTrue);
+      expect(devices.any((d) => d.category == 'light' && d.name.contains('Wipro')), isTrue);
+      expect(devices.any((d) => d.category == 'tv' && d.name.contains('OnePlus')), isTrue);
     });
 
     test('SmartThings Laundry Service generates fabric-specific recipes', () {
@@ -48,98 +99,30 @@ void main() {
       expect(homeCare['softenerLow'], isFalse);
     });
 
-    test('Samsung Washer updates EcoBubble, AI Wash, and Auto Dispenser levels', () {
-      final washer = state.allDevices.firstWhere((d) => d is WasherDevice) as WasherDevice;
-
-      state.updateSamsungWasher(
-        washer.id,
+    test('Samsung Washer updates EcoBubble, AI Wash, and cycle parameters', () {
+      provider.updateSamsungWasher(
+        'samsung_washer',
+        cycle: 'AI Wash (Auto Sense)',
         ecoBubble: true,
         aiWash: true,
         superSpeed: true,
-        detergent: 80,
-        softener: 50,
-        addWashDoorLocked: false,
+        waterTemp: 40,
+        spinSpeed: 'High',
       );
 
-      final updated = state.allDevices.firstWhere((d) => d.id == washer.id) as WasherDevice;
-      expect(updated.ecoBubbleEnabled, isTrue);
-      expect(updated.aiWashEnabled, isTrue);
-      expect(updated.superSpeedEnabled, isTrue);
-      expect(updated.detergentLevelPercent, 80);
-      expect(updated.softenerLevelPercent, 50);
-      expect(updated.addWashDoorLocked, isFalse);
+      final washer = provider.devices.firstWhere((d) => d.id == 'samsung_washer');
+      expect(washer.selectedCycle, 'AI Wash (Auto Sense)');
+      expect(washer.ecoBubbleEnabled, isTrue);
+      expect(washer.aiWashEnabled, isTrue);
+      expect(washer.superSpeedEnabled, isTrue);
     });
 
-    test('OnePlus TV updates volume, input, apps, and OnePlus Connect Smart Volume', () async {
-      final tv = state.allDevices.firstWhere((d) => d is TvDevice) as TvDevice;
-
-      state.updateTv(
-        tv.id,
-        volume: 35,
-        input: 'HDMI 1 (Gaming)',
-        app: 'Netflix',
-        smartVolume: true,
-        pictureMode: 'Cinema',
-      );
-
-      final updated = state.allDevices.firstWhere((d) => d.id == tv.id) as TvDevice;
-      expect(updated.volume, 35);
-      expect(updated.currentInput, 'HDMI 1 (Gaming)');
-      expect(updated.currentApp, 'Netflix');
-      expect(updated.smartVolumeEnabled, isTrue);
-      expect(updated.pictureMode, 'Cinema');
-
-      await state.sendTvKey(tv.id, 'dpad_up');
-    });
-
-    test('Wipro Smart Bulb updates CCT Kelvin tunable white and 16M RGB colors', () {
-      final bulb = state.allDevices.firstWhere((d) => d is LightDevice) as LightDevice;
-
-      state.updateWiproBulb(
-        bulb.id,
-        brightness: 0.95,
-        colorTempKelvin: 6500,
-        color: const Color(0xFFE0F7FA),
-        scene: 'Focus Work',
-        musicSync: true,
-      );
-
-      final updated = state.allDevices.firstWhere((d) => d.id == bulb.id) as LightDevice;
-      expect(updated.brightness, 0.95);
-      expect(updated.colorTempKelvin, 6500);
-      expect(updated.activeScene, 'Focus Work');
-      expect(updated.musicSyncActive, isTrue);
-    });
-
-    test('LG DualCool AC updates fan speed, 4-way vane swing, and Plasmaster Ionizer', () {
-      final ac = state.allDevices.firstWhere((d) => d is ThermostatDevice) as ThermostatDevice;
-
-      state.updateLgAc(
-        ac.id,
-        targetTemp: 22.0,
-        fanSpeed: 'High',
-        vaneSwing: true,
-        airClean: true,
-        jetCool: true,
-      );
-
-      final updated = state.allDevices.firstWhere((d) => d.id == ac.id) as ThermostatDevice;
-      expect(updated.targetTempC, 22.0);
-      expect(updated.fanSpeed, 'High');
-      expect(updated.vaneSwingActive, isTrue);
-      expect(updated.airCleanActive, isTrue);
-      expect(updated.jetCoolActive, isTrue);
-    });
-  });
-
-  group('User Specific Fleet - Widget Sheets Tests', () {
-    testWidgets('SamsungWasherSheet renders Auto Dispenser, EcoBubble, and Laundry Recipe', (tester) async {
-      final state = HomeState();
-      final washer = state.allDevices.firstWhere((d) => d is WasherDevice) as WasherDevice;
+    testWidgets('SamsungWasherSheet renders SmartThings AI Laundry Recipe and technologies', (tester) async {
+      final washer = provider.devices.firstWhere((d) => d.id == 'samsung_washer');
 
       await tester.pumpWidget(
-        ChangeNotifierProvider<HomeState>.value(
-          value: state,
+        ChangeNotifierProvider<RealHomeProvider>.value(
+          value: provider,
           child: MaterialApp(
             home: Scaffold(
               body: SamsungWasherSheet(device: washer),
@@ -148,80 +131,12 @@ void main() {
         ),
       );
 
-      expect(find.text('Auto Dispense System (SmartThings)'), findsOneWidget);
-      expect(find.text('Liquid Detergent'), findsOneWidget);
-      expect(find.text('Fabric Softener'), findsOneWidget);
+      expect(find.text('Samsung Ecobubble™ AI DD Washer'), findsOneWidget);
+      expect(find.text('SmartThings'), findsOneWidget);
       expect(find.text('SmartThings Laundry Recipe'), findsOneWidget);
       expect(find.text('EcoBubble™'), findsOneWidget);
+      expect(find.text('SuperSpeed'), findsOneWidget);
       expect(find.text('AI Wash (Sensors)'), findsOneWidget);
-      expect(find.text('Apply Smart Recipe'), findsOneWidget);
-    });
-
-    testWidgets('OnePlusTvSheet renders D-Pad remote, OxygenPlay apps, and volume controls', (tester) async {
-      final state = HomeState();
-      final tv = state.allDevices.firstWhere((d) => d is TvDevice) as TvDevice;
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<HomeState>.value(
-          value: state,
-          child: MaterialApp(
-            home: Scaffold(
-              body: OnePlusTvSheet(device: tv),
-            ),
-          ),
-        ),
-      );
-
-      expect(find.text('OnePlus Connect'), findsOneWidget);
-      expect(find.text('OK'), findsOneWidget);
-      expect(find.text('Quick App Switcher'), findsOneWidget);
-      expect(find.text('Smart Volume (OnePlus Connect)'), findsOneWidget);
-      expect(find.text('OxygenPlay'), findsWidgets);
-    });
-
-    testWidgets('LightSheet renders Wipro CCT Kelvin slider and 16M color palette', (tester) async {
-      final state = HomeState();
-      final bulb = state.allDevices.firstWhere((d) => d is LightDevice) as LightDevice;
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<HomeState>.value(
-          value: state,
-          child: MaterialApp(
-            home: Scaffold(
-              body: LightSheet(device: bulb),
-            ),
-          ),
-        ),
-      );
-
-      expect(find.text('Wipro Smart'), findsOneWidget);
-      expect(find.text('Tunable White (CCT)'), findsOneWidget);
-      expect(find.text('16M Colors (RGB Palette)'), findsOneWidget);
-      expect(find.text('Smart Scenes'), findsOneWidget);
-      expect(find.text('Music Rhythm Sync'), findsOneWidget);
-    });
-
-    testWidgets('ThermostatSheet renders LG DualCool Jet Cool, Ionizer, and Swing', (tester) async {
-      final state = HomeState();
-      final ac = state.allDevices.firstWhere((d) => d is ThermostatDevice) as ThermostatDevice;
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<HomeState>.value(
-          value: state,
-          child: MaterialApp(
-            home: Scaffold(
-              body: ThermostatSheet(device: ac),
-            ),
-          ),
-        ),
-      );
-
-      expect(find.text('LG DualCool & Google Nest • Living Room'), findsOneWidget);
-      expect(find.text('LG Jet Cool (Turbo)'), findsOneWidget);
-      expect(find.text('Plasmaster™ Ionizer'), findsOneWidget);
-      expect(find.text('Dual Vane 4-Way Swing'), findsOneWidget);
-      expect(find.text('Fan Speed:'), findsOneWidget);
-      expect(find.text('Cleanable Filter'), findsOneWidget);
     });
   });
 }

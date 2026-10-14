@@ -64,6 +64,32 @@ class RealSmartDevice {
         if (lastError != null) 'lastError': lastError,
       };
 
+  bool get isPowered => isOn;
+  set isPowered(bool v) => isOn = v;
+  String get cloudDeviceId => credentials['cloudDeviceId'] ?? credentials['devId'] ?? id;
+  bool get isDummy => credentials.isEmpty || credentials['vendor'] == 'demo';
+  String get statusSummary => isOnline ? (isOn ? 'On • ${primaryValue.round()}' : 'Off') : 'Offline';
+  bool get ecoBubbleEnabled => liveAttributes['ecoBubble'] == true;
+  bool get superSpeedEnabled => liveAttributes['superSpeed'] == true;
+  bool get aiWashEnabled => liveAttributes['aiWash'] == true;
+  bool get addWashDoorLocked => liveAttributes['addWashDoorLocked'] != false;
+  int get detergentLevelPercent => int.tryParse(liveAttributes['detergentPercent']?.toString() ?? '75') ?? 75;
+  int get softenerLevelPercent => int.tryParse(liveAttributes['softenerPercent']?.toString() ?? '45') ?? 45;
+  int get drumCleanCount => int.tryParse(liveAttributes['drumCleanCount']?.toString() ?? '28') ?? 28;
+  String get selectedCycle => liveAttributes['cycle']?.toString() ?? 'AI DD Normal';
+  String? get recommendedLaundryRecipe => liveAttributes['recommendedRecipe']?.toString();
+  int get remainingMinutes => int.tryParse(liveAttributes['remainingMinutes']?.toString() ?? '19') ?? (isOn ? 19 : 0);
+  double get brightness => primaryValue / 100.0;
+  set brightness(double b) => primaryValue = (b * 100.0).clamp(0.0, 100.0);
+  double get targetTempC => primaryValue;
+  set targetTempC(double t) => primaryValue = t;
+  String get currentApp => liveAttributes['currentApp']?.toString() ?? 'OxygenPlay';
+  String get pictureMode => liveAttributes['pictureMode']?.toString() ?? 'Cinema';
+  int get volume => int.tryParse(liveAttributes['volume']?.toString() ?? '20') ?? 20;
+  String get activeScene => liveAttributes['activeScene']?.toString() ?? 'Relax';
+  bool get musicSyncActive => liveAttributes['musicSync'] == true;
+  bool get jetCoolActive => liveAttributes['jetCool'] == true;
+
   factory RealSmartDevice.fromJson(Map<String, dynamic> json) {
     final rawCreds = json['credentials'];
     final Map<String, String> safeCreds = {};
@@ -1135,6 +1161,10 @@ class RealIotController {
   Future<void> setPower(RealSmartDevice device, bool turnOn) async {
     if (!device.isOnline) {
       throw Exception('${device.name} is physically OFFLINE (check wall power / Wi-Fi).');
+    }
+    if (device.credentials['vendor'] == 'demo') {
+      device.isOn = turnOn;
+      return;
     }
     switch (device.protocol) {
       case ConnectionProtocol.smartThingsCloud:

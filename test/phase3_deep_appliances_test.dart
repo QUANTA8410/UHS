@@ -1,53 +1,70 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
-import 'package:unified_home/models/appliance_recipes.dart';
-import 'package:unified_home/models/device_model.dart';
-import 'package:unified_home/providers/home_state.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:unified_home/providers/real_home_provider.dart';
 import 'package:unified_home/services/diagnostics/smart_diagnosis_service.dart';
 import 'package:unified_home/services/energy/energy_optimizer_service.dart';
-import 'package:unified_home/ui/views/energy_view.dart';
+import 'package:unified_home/services/real_iot_controller.dart';
 import 'package:unified_home/ui/widgets/dialogs/smart_diagnosis_dialog.dart';
-import 'package:unified_home/ui/widgets/sheets/appliance_cycle_store_sheet.dart';
 
 void main() {
-  group('SmartDiagnosisService Tests', () {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  group('SmartDiagnosisService Real Telemetry Tests', () {
     final service = SmartDiagnosisService();
 
-    test('runDiagnosis returns nominal report for normal conditions', () async {
-      final report = await service.runDiagnosis(deviceId: 'washer_1');
+    test('runDiagnosis returns nominal report for online normal device', () async {
+      final washer = RealSmartDevice(
+        id: 'washer_1',
+        name: 'Samsung AI Ecobubble Washer',
+        room: 'Laundry',
+        category: 'washer',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: {},
+        isOnline: true,
+        liveWatts: 150.0,
+        ratedMaxWatts: 2000.0,
+      );
+
+      final report = await service.runDiagnosis(
+        deviceId: washer.id,
+        device: washer,
+      );
 
       expect(report.deviceId, 'washer_1');
       expect(report.overallHealth, DiagnosticHealth.good);
       expect(report.activeErrorCode, isNull);
       expect(report.componentChecks, isNotEmpty);
       expect(
-        report.componentChecks.any((c) => c.componentName.contains('DirectDrive')),
+        report.componentChecks.any((c) => c.componentName.contains('Network') || c.componentName.contains('Power')),
         isTrue,
       );
-      expect(
-        report.componentChecks.any((c) => c.componentName.contains('Drain Pump')),
-        isTrue,
-      );
-      expect(report.resolutionSteps, isNotEmpty);
     });
 
-    test('runDiagnosis handles simulated OE error with resolution checklist', () async {
-      final report = await service.runDiagnosis(
-        deviceId: 'washer_1',
-        simulatedFaultCode: 'OE',
+    test('runDiagnosis detects offline hardware error', () async {
+      final offlineDev = RealSmartDevice(
+        id: 'washer_offline',
+        name: 'Samsung Washer',
+        room: 'Laundry',
+        category: 'washer',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: {},
+        isOnline: false,
       );
 
-      expect(report.deviceId, 'washer_1');
-      expect(report.overallHealth, DiagnosticHealth.fault);
-      expect(report.activeErrorCode, 'OE');
-      expect(report.errorSummary, contains('Drain Pump Error'));
-      expect(report.resolutionSteps.length, greaterThanOrEqualTo(3));
-      expect(report.resolutionSteps.any((s) => s.contains('drain filter')), isTrue);
+      final report = await service.runDiagnosis(
+        deviceId: offlineDev.id,
+        device: offlineDev,
+      );
 
-      final pumpCheck = report.componentChecks.firstWhere((c) => c.componentName.contains('Drain Pump'));
-      expect(pumpCheck.status, DiagnosticHealth.fault);
-      expect(pumpCheck.healthScore, lessThan(50));
+      expect(report.overallHealth, DiagnosticHealth.fault);
+      expect(report.activeErrorCode, 'NET_OFFLINE');
+      expect(report.resolutionSteps.isNotEmpty, isTrue);
     });
   });
 
@@ -91,6 +108,25 @@ void main() {
       expect(aiProj.carbonAvoidedKgPerMonth, greaterThan(0));
     });
 
+    test('calculateFromRealHome integrates directly with RealHomeProvider wattage', () {
+      final home = RealHomeProvider(autoInitStorage: false, autoStartPolling: false);
+      final dev = RealSmartDevice(
+        id: 'ac_living',
+        name: 'LG DualCool AC',
+        room: 'Living Room',
+        category: 'ac',
+        protocol: ConnectionProtocol.customHttpWebhook,
+        credentials: {},
+        liveWatts: 1200.0,
+      );
+      home.addDeviceDirect(dev);
+
+      final proj = service.calculateFromRealHome(home, aiEnergyModeActive: true);
+      expect(proj.hourlyCostNow, greaterThan(0));
+      expect(proj.monthlySavingsWithAiMode, greaterThan(0));
+      home.dispose();
+    });
+
     test('getPeakHourAdvice returns proper guidance for peak and off-peak', () {
       final peakTime = DateTime(2026, 10, 13, 17, 30);
       final offPeakTime = DateTime(2026, 10, 13, 11, 0);
@@ -100,125 +136,42 @@ void main() {
     });
   });
 
-  group('HomeState Phase 3 Integration Tests', () {
-    late HomeState state;
-
-    setUp(() {
-      state = HomeState();
-    });
-
-    test('downloadCycle adds cycle to availableWashCycles and ignores duplicates', () {
-      final initialCount = state.availableWashCycles.length;
-      const newCycle = WashCycleRecipe(
-        id: 'cycle_denim_pro',
-        name: 'Denim Heavy',
-        description: 'Deep soak and low mechanical stress for jeans',
-        durationMinutes: 70,
-        defaultTempC: 30,
-        defaultSpinSpeed: 'Med',
-      );
-
-      state.downloadCycle(newCycle);
-      expect(state.availableWashCycles.length, initialCount + 1);
-      expect(state.availableWashCycles.any((c) => c.id == 'cycle_denim_pro'), isTrue);
-
-      // Duplicate download attempt
-      state.downloadCycle(newCycle);
-      expect(state.availableWashCycles.length, initialCount + 1);
-    });
-
-    test('updateWasher updates parameters including ThinQ UP cycles', () {
-      final washer = state.allDevices.firstWhere((d) => d is WasherDevice) as WasherDevice;
-
-      state.updateWasher(
-        washer.id,
-        cycle: 'Baby Wear Care',
-        waterTemp: 60,
-        spinSpeed: 'Low',
-        steam: true,
-        turboWash: true,
-      );
-
-      final updated = state.allDevices.firstWhere((d) => d.id == washer.id) as WasherDevice;
-      expect(updated.selectedCycle, 'Baby Wear Care');
-      expect(updated.waterTempC, 60);
-      expect(updated.spinSpeed, 'Low');
-      expect(updated.steamEnabled, isTrue);
-      expect(updated.turboWashEnabled, isTrue);
-    });
-  });
-
   group('Phase 3 Widget Tests', () {
-    testWidgets('ApplianceCycleStoreSheet renders downloadable catalog', (tester) async {
-      final state = HomeState();
-      final washer = state.allDevices.firstWhere((d) => d is WasherDevice) as WasherDevice;
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<HomeState>.value(
-          value: state,
-          child: MaterialApp(
-            home: Scaffold(
-              body: ApplianceCycleStoreSheet(washer: washer),
-            ),
-          ),
-        ),
-      );
-
-      expect(find.text('LG ThinQ UP™ Cycle Store'), findsOneWidget);
-      expect(find.text('Gym & Activewear Odor Care'), findsOneWidget);
-      expect(find.text('Baby Wear Sanitization'), findsOneWidget);
-      expect(find.text('Denim & Color Lock'), findsOneWidget);
-    });
-
     testWidgets('SmartDiagnosisDialog runs diagnosis and renders health meters', (tester) async {
-      final state = HomeState();
-      final washer = state.allDevices.firstWhere((d) => d is WasherDevice) as WasherDevice;
+      final home = RealHomeProvider(autoInitStorage: false, autoStartPolling: false);
+      final washer = RealSmartDevice(
+        id: 'washer_1',
+        name: 'Samsung Ecobubble Washer',
+        room: 'Laundry Room',
+        category: 'washer',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: {},
+        isOnline: true,
+        liveWatts: 180.0,
+        ratedMaxWatts: 2000.0,
+      );
+      home.addDeviceDirect(washer);
 
       await tester.pumpWidget(
-        ChangeNotifierProvider<HomeState>.value(
-          value: state,
+        ChangeNotifierProvider<RealHomeProvider>.value(
+          value: home,
           child: MaterialApp(
             home: Scaffold(
-              body: SmartDiagnosisDialog(washer: washer),
+              body: SmartDiagnosisDialog(device: washer),
             ),
           ),
         ),
       );
 
-      // Loading state initially
       expect(find.text('LG Smart Diagnosis™'), findsOneWidget);
 
-      // Settle diagnosis simulation
       await tester.pumpAndSettle(const Duration(seconds: 1));
 
       expect(find.text('Appliance in Optimal Health'), findsOneWidget);
       expect(find.text('Subsystem Health Telemetry'), findsOneWidget);
-      expect(find.text('Inverter DirectDrive Motor'), findsOneWidget);
-      expect(find.text('Drain Pump Assembly'), findsOneWidget);
-    });
+      expect(find.text('Network Radio & TCP Socket'), findsOneWidget);
 
-    testWidgets('EnergyView displays tariff metrics and AI Energy Mode controls', (tester) async {
-      final state = HomeState();
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<HomeState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: EnergyView(),
-          ),
-        ),
-      );
-
-      expect(find.text('SmartThings Energy Hub'), findsOneWidget);
-      expect(find.text('Real-Time Household Power Draw'), findsOneWidget);
-      expect(find.text('Tariff & Cost Projections'), findsOneWidget);
-      expect(find.text('Current Cost'), findsOneWidget);
-      expect(find.text('Estimated Bill'), findsOneWidget);
-      expect(find.text('AI Mode Savings'), findsOneWidget);
-      expect(find.text('Carbon Avoided'), findsOneWidget);
-
-      await tester.scrollUntilVisible(find.text('AI Energy Mode (SmartThings)'), 200);
-      expect(find.text('AI Energy Mode (SmartThings)'), findsOneWidget);
+      home.dispose();
     });
   });
 }

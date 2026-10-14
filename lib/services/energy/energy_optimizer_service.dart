@@ -1,3 +1,5 @@
+import '../../providers/real_home_provider.dart';
+
 class UtilityTariff {
   final double offPeakRatePerKWh; // e.g. $0.14
   final double peakRatePerKWh; // e.g. $0.38
@@ -76,5 +78,13 @@ class EnergyOptimizerService {
       return '⚠️ Running now is during Peak Hours (\$${tariff.peakRatePerKWh.toStringAsFixed(2)}/kWh). Delaying to ${tariff.peakEndHour}:00 will save \$${(tariff.peakRatePerKWh - tariff.offPeakRatePerKWh).toStringAsFixed(2)} per cycle.';
     }
     return '✅ Optimal time! Currently on Off-Peak Tariff (\$${tariff.offPeakRatePerKWh.toStringAsFixed(2)}/kWh).';
+  }
+
+  /// Calculates predictions directly from real hardware telemetry in RealHomeProvider
+  EnergyPrediction calculateFromRealHome(RealHomeProvider home, {bool aiEnergyModeActive = true}) {
+    return calculateProjections(
+      currentPowerWatts: home.totalLiveWatts,
+      aiEnergyModeActive: aiEnergyModeActive,
+    );
   }
 }

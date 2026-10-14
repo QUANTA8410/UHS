@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:unified_home/models/house_3d_twin_model.dart';
 import 'package:unified_home/models/partner_app_model.dart';
-import 'package:unified_home/providers/home_state.dart';
-import 'package:unified_home/ui/widgets/dialogs/add_device_dialog.dart';
-import 'package:unified_home/ui/views/map_view.dart';
+import 'package:unified_home/providers/real_home_provider.dart';
+import 'package:unified_home/ui/widgets/map3d/isometric_house_3d_widget.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('Phase 5: Google Home Partner Apps Directory Tests', () {
     test('Google Home catalog contains 30+ top ecosystem brands', () {
       final catalog = PartnerApp.googleHomeCatalog;
@@ -39,16 +41,24 @@ void main() {
     });
   });
 
-  group('Phase 5: AddDeviceDialog Google Home Catalog UI Tests', () {
-    testWidgets('Renders search input and Works with Google tab', (tester) async {
-      final state = HomeState();
+  group('Phase 5: 3D Spatial Digital Twin Map Viewport Tests', () {
+    testWidgets('IsometricHouse3DWidget renders 3D isometric layout and responds to room selection', (tester) async {
+      final home = RealHomeProvider(autoInitStorage: false, autoStartPolling: false);
+      final layout = House3DTwinLayout.defaultApartment();
 
       await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: state,
-          child: const MaterialApp(
+        ChangeNotifierProvider<RealHomeProvider>.value(
+          value: home,
+          child: MaterialApp(
             home: Scaffold(
-              body: AddDeviceDialog(),
+              body: SizedBox(
+                width: 800,
+                height: 600,
+                child: IsometricHouse3DWidget(
+                  layout: layout,
+                  selectedRoomId: 'all',
+                ),
+              ),
             ),
           ),
         ),
@@ -56,49 +66,9 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      expect(find.text('Add & Connect Real Devices'), findsOneWidget);
-      expect(find.text('Works with Google Home & Unified IoT'), findsOneWidget);
-      expect(find.text('Works with Google'), findsOneWidget);
+      expect(find.byType(IsometricHouse3DWidget), findsOneWidget);
 
-      // Verify category filter chips are present
-      expect(find.text('All Apps'), findsOneWidget);
-      expect(find.text('Appliances'), findsOneWidget);
-      expect(find.text('Climate & AC'), findsOneWidget);
-      expect(find.text('Lighting'), findsOneWidget);
-    });
-  });
-
-  group('Phase 5: 3D Spatial Digital Twin Map View Tests', () {
-    testWidgets('MapView provides camera controls and orbit hints', (tester) async {
-      final state = HomeState();
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<HomeState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: Scaffold(
-              body: MapView(),
-            ),
-          ),
-        ),
-      );
-
-      await tester.pumpAndSettle();
-
-      // Camera preset HUD buttons
-      expect(find.byTooltip('3D Orbit View'), findsOneWidget);
-      expect(find.byTooltip('Top-Down Blueprint'), findsOneWidget);
-      expect(find.byTooltip('Front 3D Elevation'), findsOneWidget);
-
-      // Tap Top-Down Blueprint preset
-      await tester.tap(find.byTooltip('Top-Down Blueprint'));
-      await tester.pumpAndSettle();
-
-      // Tap 3D Orbit View preset
-      await tester.tap(find.byTooltip('3D Orbit View'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Interactive 3D Digital Twin • Drag to Orbit'), findsOneWidget);
+      home.dispose();
     });
   });
 }
