@@ -5,42 +5,71 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Outer Frosted Glass Squircle Container -->
+
+    <!-- Outer Frosted Glass Squircle Rim -->
     <path
-        android:pathData="M34,26 L74,26 A8,8 0 0,1 82,34 L82,74 A8,8 0 0,1 74,82 L34,82 A8,8 0 0,1 26,74 L26,34 A8,8 0 0,1 34,26 Z"
-        android:fillColor="#22FFFFFF"
+        android:pathData="M34,24 L74,24 C80,24 84,28 84,34 L84,74 C84,80 80,84 74,84 L34,84 C28,84 24,80 24,74 L24,34 C24,28 28,24 34,24 Z"
         android:strokeWidth="1.2"
-        android:strokeColor="#88FFFFFF" />
-    <!-- Glowing Home Roof & Automation Core -->
-    <path
-        android:strokeWidth="3.5"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:fillColor="#00000000"
-        android:pathData="M35,53 L54,36 L73,53">
-        <aapt:attr name="android:strokeColor">
+        android:strokeColor="#4DFFFFFF"
+        android:fillColor="#12FFFFFF" />
+
+    <!-- Isometric 3D House Roof / Top Diamond (Liquid Cyan Glass) -->
+    <path android:pathData="M54,29 L76,41.5 L54,54 L32,41.5 Z">
+        <aapt:attr name="android:fillColor">
             <gradient
-                android:startX="35"
-                android:startY="36"
-                android:endX="73"
-                android:endY="53"
-                android:type="linear">
-                <item android:offset="0.0" android:color="#00D4FF" />
-                <item android:offset="0.5" android:color="#FFFFFF" />
-                <item android:offset="1.0" android:color="#FF9F0A" />
-            </gradient>
+                android:type="linear"
+                android:startX="32"
+                android:startY="29"
+                android:endX="76"
+                android:endY="54"
+                android:startColor="#CC64D2FF"
+                android:endColor="#550A84FF" />
         </aapt:attr>
     </path>
-    <!-- Home Base Walls -->
+
+    <!-- Isometric Left Extruded Wall (Warm Amber Interior Glow) -->
+    <path android:pathData="M32,41.5 L54,54 L54,77 L32,64.5 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="32"
+                android:startY="41.5"
+                android:endX="54"
+                android:endY="77"
+                android:startColor="#EEFFB340"
+                android:endColor="#BBFF6B00" />
+        </aapt:attr>
+    </path>
+
+    <!-- Isometric Right Extruded Wall (Deep Glass Shadow + Cyan Specular) -->
+    <path android:pathData="M54,54 L76,41.5 L76,64.5 L54,77 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="41.5"
+                android:endX="76"
+                android:endY="77"
+                android:startColor="#CC1E3A8A"
+                android:endColor="#DD0F172A" />
+        </aapt:attr>
+    </path>
+
+    <!-- Inner Glowing Room Cutaway Window (Left Wall) -->
     <path
-        android:strokeWidth="3.0"
-        android:strokeLineCap="round"
+        android:pathData="M37,48.5 L49,55.5 L49,68.5 L37,61.5 Z"
+        android:fillColor="#FFFFF4D6" />
+
+    <!-- Inner Glowing Smart Climate Window (Right Wall) -->
+    <path
+        android:pathData="M59,55.5 L71,48.5 L71,61.5 L59,68.5 Z"
+        android:fillColor="#AA00D4FF" />
+
+    <!-- Specular Glass Edge Highlights -->
+    <path
+        android:pathData="M54,29 L76,41.5 L54,54 L32,41.5 Z M54,54 L54,77 M32,41.5 L32,64.5 L54,77 L76,64.5 L76,41.5"
+        android:strokeWidth="1.6"
+        android:strokeColor="#EEFFFFFF"
         android:strokeLineJoin="round"
-        android:strokeColor="#E6FFFFFF"
-        android:fillColor="#1A00D4FF"
-        android:pathData="M41,50 L41,70 L67,70 L67,50" />
-    <!-- Center Energy Pulse Core -->
-    <path
-        android:fillColor="#30D158"
-        android:pathData="M54,58m-4.5,0a4.5,4.5 0,1 1,9 0a4.5,4.5 0,1 1,-9 0" />
+        android:fillColor="#00000000" />
 </vector>

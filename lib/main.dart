@@ -6,6 +6,7 @@ import 'providers/home_state.dart';
 import 'providers/real_home_provider.dart';
 import 'theme/app_theme.dart';
 import 'theme/apple_glass_theme.dart';
+import 'ui/views/apple_glass_home_shell.dart';
 import 'ui/views/liquid_glass_splash_screen.dart';
 import 'ui/views/main_shell.dart';
 
@@ -38,7 +39,9 @@ class UnifiedAppleGlassApp extends StatelessWidget {
       title: 'Unified Smart Home',
       debugShowCheckedModeBanner: false,
       theme: AppleGlassTheme.themeData,
-      home: const LiquidGlassSplashScreen(),
+      home: const LiquidGlassSplashScreen(
+        child: AppleGlassHomeShell(),
+      ),
     );
   }
 }
