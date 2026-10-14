@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../../models/house_3d_twin_model.dart';
 import '../../providers/real_home_provider.dart';
 import '../../services/auth/brand_oauth_catalog.dart';
 import '../../services/automation/smart_automation_engine.dart';
@@ -13,6 +14,8 @@ import '../widgets/dialogs/camera_cockpit_sheet.dart';
 import '../widgets/dialogs/node_server_dashboard_sheet.dart';
 import '../widgets/dialogs/smart_rule_studio_sheet.dart';
 import '../widgets/energy/animated_power_flow_card.dart';
+import '../widgets/map3d/floor_plan_editor_sheet.dart';
+import '../widgets/map3d/isometric_house_3d_widget.dart';
 
 class AppleGlassHomeShell extends StatefulWidget {
   const AppleGlassHomeShell({super.key});
@@ -195,7 +198,17 @@ class _GlassDashboardTab extends StatefulWidget {
 }
 
 class _GlassDashboardTabState extends State<_GlassDashboardTab> {
-  bool _showPowerFlow = true;
+  bool _showPowerFlow = false;
+  String _selectedRoom = 'All';
+  House3DTwinLayout _houseLayout = House3DTwinLayout.defaultApartment();
+
+  @override
+  void initState() {
+    super.initState();
+    House3DTwinLayout.loadFromPrefs().then((layout) {
+      if (mounted) setState(() => _houseLayout = layout);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -230,6 +243,12 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
         ),
       );
     }
+
+    final filteredDevices = _selectedRoom == 'All'
+        ? devices
+        : devices
+            .where((d) => d.room.toLowerCase().contains(_selectedRoom.toLowerCase()))
+            .toList();
 
     return CustomScrollView(
       slivers: [
@@ -287,12 +306,115 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
           ),
         ),
 
-        // 2. Horizontal One-Tap Scene Ribbon
+        // 2. Top 3D Isometric Dollhouse Header
         SliverToBoxAdapter(
-          child: _buildSceneRibbon(context, home),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 6, 18, 10),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: Container(
+                height: 285,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF090E1D),
+                  border: Border.all(color: Colors.white12, width: 1.2),
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black54, blurRadius: 24, offset: Offset(0, 8)),
+                  ],
+                ),
+                child: Stack(
+                  children: [
+                    IsometricHouse3DWidget(
+                      height: 285,
+                      layout: _houseLayout,
+                      selectedRoomId: _selectedRoom == 'All' ? 'all' : _selectedRoom.toLowerCase(),
+                      onRoomSelected: (r) => setState(() =>
+                          _selectedRoom = r == 'all' ? 'All' : (r[0].toUpperCase() + r.substring(1))),
+                      onFixtureLongPress: (fix, dev) {
+                        if (dev != null) _showDeviceControlSheet(context, dev);
+                      },
+                      onOpenBlueprintEditor: () async {
+                        final updated = await FloorPlanEditorSheet.show(context, layout: _houseLayout);
+                        if (updated != null) {
+                          setState(() => _houseLayout = updated);
+                        }
+                      },
+                    ),
+                    Positioned(
+                      top: 12,
+                      left: 14,
+                      child: GlassContainer(
+                        borderRadius: 16,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.apartment_rounded, size: 14, color: Color(0xFF0A84FF)),
+                            const SizedBox(width: 5),
+                            Text(
+                              _selectedRoom == 'All' ? '3D Isometric Twin' : '$_selectedRoom Camera Zoom',
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 12,
+                      right: 14,
+                      child: GlassContainer(
+                        borderRadius: 16,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        activeTint: const Color(0xFFFF453A),
+                        isActive: devices.any((d) => d.isOn),
+                        onTap: () async {
+                          HapticFeedback.heavyImpact();
+                          final anyOn = devices.any((d) => d.isOn);
+                          for (final d in devices) {
+                            if (anyOn && d.isOn) {
+                              await home.toggleDevicePower(d);
+                            } else if (!anyOn && !d.isOn) {
+                              await home.toggleDevicePower(d);
+                            }
+                          }
+                        },
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.power_settings_new_rounded,
+                              size: 14,
+                              color: devices.any((d) => d.isOn) ? const Color(0xFFFF453A) : Colors.white70,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              devices.any((d) => d.isOn) ? 'Master Off' : 'Master On',
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
 
-        // 3. Collapsible Animated Tesla-Style Power Flow Card
+        // 3. Five One-Tap Mood Scene Pills (Bright, Cozy, Movie, Night, Away)
+        SliverToBoxAdapter(
+          child: _build5MoodSceneRibbon(context, home),
+        ),
+
+        // 4. Room Camera Zoom Filter Bar (All, Living, Dining, Kitchen, Bedroom, Bathroom) + All on / All off
+        SliverToBoxAdapter(
+          child: _buildRoomCameraFilterBar(context, home),
+        ),
+
+        // 5. Collapsible Animated Tesla-Style Power Flow Card
         if (_showPowerFlow)
           SliverToBoxAdapter(
             child: Padding(
@@ -301,75 +423,90 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
             ),
           ),
 
-        // 4. Universal 12-Category Animated Glass Grid Cards
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(18, 4, 18, 120),
-          sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              mainAxisSpacing: 16,
-              crossAxisSpacing: 16,
-              childAspectRatio: 0.98,
+        // 6. Universal 12-Category Animated Glass Grid Cards (Filtered by Selected Room)
+        if (filteredDevices.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(28.0),
+              child: GlassContainer(
+                borderRadius: 24,
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    const Icon(Icons.meeting_room_outlined, size: 40, color: Colors.white54),
+                    const SizedBox(height: 10),
+                    Text(
+                      'No devices in $_selectedRoom',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 6),
+                    TextButton(
+                      onPressed: () => setState(() => _selectedRoom = 'All'),
+                      child: const Text('Show All Devices', style: TextStyle(color: Color(0xFF0A84FF))),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final dev = devices[index];
-                final inFlight = home.networkEngine.isDeviceInFlight(dev.id);
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 4, 18, 120),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 16,
+                childAspectRatio: 0.98,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final dev = filteredDevices[index];
+                  final inFlight = home.networkEngine.isDeviceInFlight(dev.id);
 
-                return UniversalAnimatedGlassCard(
-                  device: dev,
-                  isSyncing: inFlight,
-                  onTap: () => _showDeviceControlSheet(context, dev),
-                  onPowerToggle: () async {
-                    HapticFeedback.mediumImpact();
-                    try {
-                      await home.toggleDevicePower(dev);
-                    } catch (e) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Hardware Error: $e')),
-                        );
+                  return UniversalAnimatedGlassCard(
+                    device: dev,
+                    isSyncing: inFlight,
+                    onTap: () => _showDeviceControlSheet(context, dev),
+                    onPowerToggle: () async {
+                      HapticFeedback.mediumImpact();
+                      try {
+                        await home.toggleDevicePower(dev);
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Hardware Error: $e')),
+                          );
+                        }
                       }
-                    }
-                  },
-                  onLongPress: () => _showDeviceControlSheet(context, dev),
-                  onHorizontalLevelDrag: (val) => home.setDeviceLevel(dev, val),
-                );
-              },
-              childCount: devices.length,
+                    },
+                    onLongPress: () => _showDeviceControlSheet(context, dev),
+                    onHorizontalLevelDrag: (val) => home.setDeviceLevel(dev, val),
+                  );
+                },
+                childCount: filteredDevices.length,
+              ),
             ),
           ),
-        ),
       ],
     );
   }
 
-  Widget _buildSceneRibbon(BuildContext context, RealHomeProvider home) {
+  Widget _build5MoodSceneRibbon(BuildContext context, RealHomeProvider home) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
       child: Row(
         children: [
           _scenePill(
-            label: home.nodeServer.isRunning ? '🏛️ Hub 24/7 (Online)' : '🏛️ 24/7 Hub Node',
-            tint: home.nodeServer.isRunning ? const Color(0xFF30D158) : const Color(0xFF00D4FF),
-            onTap: () {
-              HapticFeedback.mediumImpact();
-              NodeServerDashboardSheet.show(context);
-            },
-          ),
-          const SizedBox(width: 10),
-          _scenePill(
-            label: '🎬 Movie Night',
-            tint: const Color(0xFFBF5AF2),
+            label: '☀️ Bright',
+            tint: const Color(0xFFFFD60A),
             onTap: () async {
               HapticFeedback.heavyImpact();
               for (final d in home.devices) {
-                if (d.category == 'tv' && !d.isOn) {
-                  await home.toggleDevicePower(d);
-                } else if (d.category == 'light') {
+                if (d.category == 'light') {
                   if (!d.isOn) await home.toggleDevicePower(d);
-                  await home.setDeviceLevel(d, 15.0);
+                  await home.setDeviceLevel(d, 100.0);
                 } else if (d.category == 'ac') {
                   if (!d.isOn) await home.toggleDevicePower(d);
                   await home.setDeviceLevel(d, 22.0);
@@ -377,39 +514,21 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
               }
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('🎬 Scene Activated: Movie Night Mode')),
+                  const SnackBar(content: Text('☀️ Scene: Bright 100% Warm White & 22°C Cool')),
                 );
               }
             },
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           _scenePill(
-            label: '❄️ Turbo Cool 18°C',
-            tint: const Color(0xFF00D4FF),
-            onTap: () async {
-              HapticFeedback.heavyImpact();
-              for (final d in home.devices.where((d) => d.category == 'ac')) {
-                if (!d.isOn) await home.toggleDevicePower(d);
-                await home.setDeviceLevel(d, 18.0);
-              }
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('❄️ Scene Activated: Turbo Cool 18°C')),
-                );
-              }
-            },
-          ),
-          const SizedBox(width: 10),
-          _scenePill(
-            label: '🌙 Goodnight',
+            label: '🕯️ Cozy',
             tint: const Color(0xFFFF9F0A),
             onTap: () async {
               HapticFeedback.heavyImpact();
               for (final d in home.devices) {
-                if (d.category == 'light' && d.isOn) {
-                  await home.toggleDevicePower(d);
-                } else if (d.category == 'tv' && d.isOn) {
-                  await home.toggleDevicePower(d);
+                if (d.category == 'light') {
+                  if (!d.isOn) await home.toggleDevicePower(d);
+                  await home.setDeviceLevel(d, 60.0);
                 } else if (d.category == 'ac') {
                   if (!d.isOn) await home.toggleDevicePower(d);
                   await home.setDeviceLevel(d, 24.0);
@@ -417,24 +536,161 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
               }
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('🌙 Scene Activated: Goodnight Sleep Mode')),
+                  const SnackBar(content: Text('🕯️ Scene: Cozy 60% Warm Amber & 24°C')),
                 );
               }
             },
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           _scenePill(
-            label: '⚡ All Off',
-            tint: const Color(0xFFFF453A),
+            label: '🎬 Movie',
+            tint: const Color(0xFFBF5AF2),
             onTap: () async {
               HapticFeedback.heavyImpact();
-              for (final d in home.devices.where((d) => d.isOn)) {
-                await home.toggleDevicePower(d);
+              for (final d in home.devices) {
+                if (d.category == 'tv') {
+                  if (!d.isOn) await home.toggleDevicePower(d);
+                } else if (d.category == 'light') {
+                  if (d.name.toLowerCase().contains('backlight') ||
+                      d.name.toLowerCase().contains('wipro')) {
+                    if (!d.isOn) await home.toggleDevicePower(d);
+                    await home.setDeviceLevel(d, 40.0);
+                  } else if (d.isOn) {
+                    await home.toggleDevicePower(d);
+                  }
+                }
               }
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('⚡ Scene Activated: All Appliances Off')),
+                  const SnackBar(content: Text('🎬 Scene: Movie Cinema Mode')),
                 );
+              }
+            },
+          ),
+          const SizedBox(width: 8),
+          _scenePill(
+            label: '🌙 Night',
+            tint: const Color(0xFF5E5CE6),
+            onTap: () async {
+              HapticFeedback.heavyImpact();
+              for (final d in home.devices) {
+                if (d.category == 'tv' && d.isOn) {
+                  await home.toggleDevicePower(d);
+                } else if (d.category == 'light') {
+                  if (d.name.toLowerCase().contains('bed') ||
+                      d.name.toLowerCase().contains('night')) {
+                    if (!d.isOn) await home.toggleDevicePower(d);
+                    await home.setDeviceLevel(d, 15.0);
+                  } else if (d.isOn) {
+                    await home.toggleDevicePower(d);
+                  }
+                } else if (d.category == 'ac') {
+                  if (!d.isOn) await home.toggleDevicePower(d);
+                  await home.setDeviceLevel(d, 25.0);
+                }
+              }
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('🌙 Scene: Night Light 15% & AC 25°C Sleep')),
+                );
+              }
+            },
+          ),
+          const SizedBox(width: 8),
+          _scenePill(
+            label: '🛡️ Away',
+            tint: const Color(0xFFFF453A),
+            onTap: () async {
+              HapticFeedback.heavyImpact();
+              for (final d in home.devices) {
+                if (d.category == 'light' && d.isOn) {
+                  await home.toggleDevicePower(d);
+                } else if (d.category == 'tv' && d.isOn) {
+                  await home.toggleDevicePower(d);
+                } else if (d.category == 'ac' && d.isOn) {
+                  await home.toggleDevicePower(d);
+                }
+              }
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('🛡️ Scene: Away Mode • Lights & ACs Off • Cameras Armed')),
+                );
+              }
+            },
+          ),
+          const SizedBox(width: 8),
+          _scenePill(
+            label: home.nodeServer.isRunning ? '🏛️ Hub 24/7' : '🏛️ Standby Hub',
+            tint: home.nodeServer.isRunning ? const Color(0xFF30D158) : const Color(0xFF00D4FF),
+            onTap: () {
+              HapticFeedback.mediumImpact();
+              NodeServerDashboardSheet.show(context);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoomCameraFilterBar(BuildContext context, RealHomeProvider home) {
+    final rooms = ['All', 'Living', 'Dining', 'Kitchen', 'Bedroom', 'Bathroom'];
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+      child: Row(
+        children: [
+          ...rooms.map((room) {
+            final isSelected = _selectedRoom.toLowerCase() == room.toLowerCase();
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(room),
+                selected: isSelected,
+                selectedColor: const Color(0xFF0A84FF),
+                backgroundColor: Colors.white.withValues(alpha: 0.08),
+                labelStyle: TextStyle(
+                  color: isSelected ? Colors.white : Colors.white70,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  fontSize: 12,
+                ),
+                onSelected: (val) {
+                  if (val) {
+                    HapticFeedback.selectionClick();
+                    setState(() => _selectedRoom = room);
+                  }
+                },
+              ),
+            );
+          }),
+          const SizedBox(width: 4),
+          ActionChip(
+            avatar: const Icon(Icons.power_settings_new_rounded, size: 13, color: Color(0xFF30D158)),
+            label: const Text('All on',
+                style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+            backgroundColor: Colors.white.withValues(alpha: 0.08),
+            onPressed: () async {
+              HapticFeedback.lightImpact();
+              final targetDevices = _selectedRoom == 'All'
+                  ? home.devices
+                  : home.devices.where((d) => d.room.toLowerCase().contains(_selectedRoom.toLowerCase()));
+              for (final d in targetDevices.where((d) => !d.isOn)) {
+                await home.toggleDevicePower(d);
+              }
+            },
+          ),
+          const SizedBox(width: 6),
+          ActionChip(
+            avatar: const Icon(Icons.power_off_rounded, size: 13, color: Color(0xFFFF453A)),
+            label: const Text('All off',
+                style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+            backgroundColor: Colors.white.withValues(alpha: 0.08),
+            onPressed: () async {
+              HapticFeedback.lightImpact();
+              final targetDevices = _selectedRoom == 'All'
+                  ? home.devices
+                  : home.devices.where((d) => d.room.toLowerCase().contains(_selectedRoom.toLowerCase()));
+              for (final d in targetDevices.where((d) => d.isOn)) {
+                await home.toggleDevicePower(d);
               }
             },
           ),
@@ -477,164 +733,71 @@ class _Interactive3DMapTab extends StatefulWidget {
 }
 
 class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
-  double _pitch = 0.78;
-  double _yaw = -0.42;
-  double _zoom = 1.0;
-  final String _selectedRoom = 'All Rooms';
-  bool _architectMode = false;
+  final GlobalKey<IsometricHouse3DWidgetState> _houseKey = GlobalKey();
+  House3DTwinLayout _layout = House3DTwinLayout.defaultApartment();
+  String _selectedRoomId = 'all';
 
-  static const List<Map<String, dynamic>> _rooms3D = [
-    {'name': 'Living Room', 'rect': Rect.fromLTWH(-140, -110, 150, 120), 'color': Color(0xFF0A84FF)},
-    {'name': 'Kitchen', 'rect': Rect.fromLTWH(20, -110, 120, 120), 'color': Color(0xFFFF9F0A)},
-    {'name': 'Master Bedroom', 'rect': Rect.fromLTWH(-140, 20, 150, 100), 'color': Color(0xFFBF5AF2)},
-    {'name': 'Laundry Room', 'rect': Rect.fromLTWH(20, 20, 120, 100), 'color': Color(0xFF30D158)},
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _loadLayout();
+  }
+
+  Future<void> _loadLayout() async {
+    final loaded = await House3DTwinLayout.loadFromPrefs();
+    if (mounted) {
+      setState(() => _layout = loaded);
+    }
+  }
+
+  Future<void> _openBlueprintStudio() async {
+    HapticFeedback.selectionClick();
+    final updated = await FloorPlanEditorSheet.show(context, layout: _layout);
+    if (updated != null && mounted) {
+      setState(() => _layout = updated);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final home = context.watch<RealHomeProvider>();
-    final devices = home.devices;
 
     return Stack(
       children: [
-        // 3D Gesture Viewport
-        GestureDetector(
-          onScaleUpdate: (details) {
-            setState(() {
-              if (details.pointerCount == 1) {
-                _yaw += details.focalPointDelta.dx * 0.01;
-                _pitch = (_pitch - details.focalPointDelta.dy * 0.01).clamp(0.15, 1.35);
-              } else if (details.pointerCount == 2) {
-                _zoom = (_zoom * details.scale).clamp(0.65, 1.8);
+        // 1. Full-Screen 3D Isometric Dollhouse Canvas
+        Positioned.fill(
+          child: IsometricHouse3DWidget(
+            key: _houseKey,
+            layout: _layout,
+            selectedRoomId: _selectedRoomId,
+            height: 500,
+            onRoomSelected: (roomId) {
+              setState(() => _selectedRoomId = roomId);
+            },
+            onFixtureTap: (fixture, linkedDevice) async {
+              if (linkedDevice != null) {
+                HapticFeedback.heavyImpact();
+                try {
+                  await home.toggleDevicePower(linkedDevice);
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error: $e')),
+                    );
+                  }
+                }
               }
-            });
-          },
-          child: Center(
-            child: Transform(
-              alignment: Alignment.center,
-              transform: Matrix4.identity()
-                ..setEntry(3, 2, 0.0014) // Perspective foreshortening
-                ..scaleByDouble(_zoom, _zoom, _zoom, 1.0)
-                ..rotateX(_pitch)
-                ..rotateZ(_yaw),
-              child: SizedBox(
-                width: 340,
-                height: 300,
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    // 3D Floor & Extruded Room Walls
-                    CustomPaint(
-                      size: const Size(340, 300),
-                      painter: _Spatial3DRoomPainter(
-                        rooms: _rooms3D,
-                        selectedRoom: _selectedRoom,
-                        devices: devices,
-                      ),
-                    ),
-                    // Interactive Floating 3D Hardware Pins
-                    ...List.generate(devices.length, (i) {
-                      final dev = devices[i];
-                      final pos = _computeDevice3DPosition(dev, i);
-                      final archetype = UniversalCategoryClassifier.classify(dev);
-                      final tint = UniversalCategoryClassifier.colorFor(archetype);
-                      final icon = UniversalCategoryClassifier.iconFor(archetype);
-
-                      return Positioned(
-                        left: 170 + pos.dx - 28,
-                        top: 150 + pos.dy - 28,
-                        child: Transform(
-                          alignment: Alignment.center,
-                          transform: Matrix4.identity()
-                            ..rotateZ(-_yaw)
-                            ..rotateX(-_pitch),
-                          child: GestureDetector(
-                            onPanUpdate: _architectMode
-                                ? (details) {
-                                    setState(() {
-                                      final cur = _computeDevice3DPosition(dev, i);
-                                      final updated = cur + details.delta;
-                                      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
-                                      attrs['mapX'] = updated.dx;
-                                      attrs['mapY'] = updated.dy;
-                                      dev.liveAttributes = attrs;
-                                    });
-                                  }
-                                : null,
-                            onTap: () async {
-                              if (_architectMode) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Architect Mode: Drag "${dev.name}" to position it on the floor plan.')),
-                                );
-                                return;
-                              }
-                              HapticFeedback.heavyImpact();
-                              try {
-                                await home.toggleDevicePower(dev);
-                              } catch (e) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Error: $e')),
-                                  );
-                                }
-                              }
-                            },
-                            onLongPress: () => _showDeviceControlSheet(context, dev),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AnimatedContainer(
-                                  duration: const Duration(milliseconds: 240),
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: dev.isOn
-                                        ? tint.withValues(alpha: 0.90)
-                                        : const Color(0xCC1C2438),
-                                    border: Border.all(
-                                      color: _architectMode ? const Color(0xFFFF9F0A) : Colors.white,
-                                      width: _architectMode ? 2.2 : 1.5,
-                                    ),
-                                    boxShadow: [
-                                      if (dev.isOn)
-                                        BoxShadow(
-                                          color: tint.withValues(alpha: 0.8),
-                                          blurRadius: 20,
-                                          spreadRadius: 4,
-                                        ),
-                                    ],
-                                  ),
-                                  child: Icon(
-                                    icon,
-                                    size: 18,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black87,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    dev.name,
-                                    style: const TextStyle(fontSize: 9, color: Colors.white),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-            ),
+            },
+            onFixtureLongPress: (fixture, linkedDevice) {
+              if (linkedDevice != null) {
+                _showDeviceControlSheet(context, linkedDevice);
+              }
+            },
+            onOpenBlueprintEditor: _openBlueprintStudio,
           ),
         ),
-        // Top Camera Preset Bar & Architect Mode Toggle
+
+        // 2. Top Action Bar: 2D Studio & Camera Presets
         Positioned(
           top: 12,
           left: 16,
@@ -643,13 +806,43 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _architectToggleChip(),
+                _actionChip(
+                  icon: Icons.architecture_rounded,
+                  label: '2D Blueprint Studio',
+                  color: const Color(0xFF00D4FF),
+                  onTap: _openBlueprintStudio,
+                ),
                 const SizedBox(width: 8),
-                _cameraPresetChip('Isometric 3D', 0.78, -0.42),
+                _cameraPresetChip('Isometric 3D', yaw: -0.46, pitch: 0.82),
                 const SizedBox(width: 8),
-                _cameraPresetChip('Top Blueprint', 0.15, 0.0),
+                _cameraPresetChip('Top Blueprint', yaw: 0.0, pitch: 0.15),
                 const SizedBox(width: 8),
-                _cameraPresetChip('Elevation Front', 1.18, 0.0),
+                _cameraPresetChip('Elevation Front', yaw: 0.0, pitch: 1.25),
+              ],
+            ),
+          ),
+        ),
+
+        // 3. Bottom Room Filter Bar
+        Positioned(
+          bottom: 16,
+          left: 16,
+          right: 16,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final r in [
+                  {'id': 'all', 'label': 'All'},
+                  {'id': 'living', 'label': 'Living'},
+                  {'id': 'dining', 'label': 'Dining'},
+                  {'id': 'kitchen', 'label': 'Kitchen'},
+                  {'id': 'bedroom', 'label': 'Bedroom'},
+                  {'id': 'bathroom', 'label': 'Bathroom'},
+                ]) ...[
+                  _roomFilterChip(r['id']!, r['label']!),
+                  const SizedBox(width: 8),
+                ],
               ],
             ),
           ),
@@ -658,31 +851,27 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
     );
   }
 
-  Widget _architectToggleChip() {
+  Widget _actionChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
     return GlassContainer(
       borderRadius: 18,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      isActive: _architectMode,
-      activeTint: const Color(0xFFFF9F0A),
-      onTap: () {
-        HapticFeedback.selectionClick();
-        setState(() => _architectMode = !_architectMode);
-      },
+      onTap: onTap,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            _architectMode ? Icons.architecture_rounded : Icons.edit_location_alt_rounded,
-            size: 14,
-            color: _architectMode ? const Color(0xFFFF9F0A) : Colors.white70,
-          ),
-          const SizedBox(width: 4),
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 6),
           Text(
-            _architectMode ? 'Architect: Active' : 'Architect Edit Mode',
-            style: TextStyle(
+            label,
+            style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: _architectMode ? Colors.white : Colors.white70,
+              color: Colors.white,
             ),
           ),
         ],
@@ -690,88 +879,46 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
     );
   }
 
-  Widget _cameraPresetChip(String label, double pitch, double yaw) {
+  Widget _cameraPresetChip(String label, {required double yaw, required double pitch}) {
     return GlassContainer(
       borderRadius: 18,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      onTap: () => setState(() {
-        _pitch = pitch;
-        _yaw = yaw;
-      }),
-      child: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        _houseKey.currentState?.setCamera(yaw: yaw, pitch: pitch);
+      },
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+        ),
+      ),
     );
   }
 
-  Offset _computeDevice3DPosition(RealSmartDevice dev, int index) {
-    final customX = dev.liveAttributes['mapX'];
-    final customY = dev.liveAttributes['mapY'];
-    if (customX is num && customY is num) {
-      return Offset(customX.toDouble(), customY.toDouble());
-    }
-    final roomEntry = _rooms3D.firstWhere(
-      (r) => r['name'] == dev.room,
-      orElse: () => _rooms3D[index % _rooms3D.length],
+  Widget _roomFilterChip(String id, String label) {
+    final isSelected = _selectedRoomId == id;
+    return GlassContainer(
+      borderRadius: 18,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      isActive: isSelected,
+      activeTint: const Color(0xFF00D4FF),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        setState(() => _selectedRoomId = id);
+      },
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: isSelected ? Colors.white : Colors.white70,
+        ),
+      ),
     );
-    final rect = roomEntry['rect'] as Rect;
-    final offsetInRoom = Offset(
-      (index % 2 == 0) ? -25.0 : 25.0,
-      (index % 3 == 0) ? -15.0 : 15.0,
-    );
-    return rect.center + offsetInRoom;
   }
-}
-
-class _Spatial3DRoomPainter extends CustomPainter {
-  final List<Map<String, dynamic>> rooms;
-  final String selectedRoom;
-  final List<RealSmartDevice> devices;
-
-  _Spatial3DRoomPainter({
-    required this.rooms,
-    required this.selectedRoom,
-    required this.devices,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.translate(size.width / 2, size.height / 2);
-
-    for (final room in rooms) {
-      final rect = room['rect'] as Rect;
-      final color = room['color'] as Color;
-      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(14));
-
-      // Floor Slab
-      canvas.drawRRect(
-        rrect,
-        Paint()
-          ..color = color.withValues(alpha: 0.16)
-          ..style = PaintingStyle.fill,
-      );
-
-      // 3D Extruded Wall Depth Effect
-      final wallRect = rect.shift(const Offset(-6, -10));
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(wallRect, const Radius.circular(14)),
-        Paint()
-          ..color = Colors.white.withValues(alpha: 0.28)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.2,
-      );
-
-      // Floor Specular Border
-      canvas.drawRRect(
-        rrect,
-        Paint()
-          ..color = color.withValues(alpha: 0.55)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.4,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _Spatial3DRoomPainter oldDelegate) => true;
 }
 
 // =============================================================================
