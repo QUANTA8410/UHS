@@ -4,6 +4,8 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:http/http.dart' as http;
+import 'master/zero_touch_onboarding_service.dart';
+import 'tv/oneplus_connect_service.dart';
 
 enum ConnectionProtocol {
   smartThingsCloud,
@@ -15,6 +17,7 @@ enum ConnectionProtocol {
   philipsHueLocal,
   philipsWizUdp,
   rtspOnvifCamera,
+  lgThinqCloud,
 }
 
 class RealSmartDevice {
@@ -26,6 +29,7 @@ class RealSmartDevice {
   final Map<String, String> credentials; // token, ip, localKey, hubUrl, component
   bool isOn;
   bool isOnline;
+  int consecutiveFailedPolls;
   double primaryValue; // Brightness (0-100) or Temp (16-30) or Spin RPM
   double liveWatts; // Exact real-time draw in Watts (0.0 when offline)
   double ratedMaxWatts; // Hardware nameplate rating (used when device lacks a shunt sensor)
@@ -41,6 +45,7 @@ class RealSmartDevice {
     required this.credentials,
     this.isOn = false,
     this.isOnline = true,
+    this.consecutiveFailedPolls = 0,
     this.primaryValue = 24.0,
     this.liveWatts = 0.0,
     this.ratedMaxWatts = 0.0,
@@ -57,6 +62,7 @@ class RealSmartDevice {
         'credentials': credentials,
         'isOn': isOn,
         'isOnline': isOnline,
+        'consecutiveFailedPolls': consecutiveFailedPolls,
         'primaryValue': primaryValue,
         'liveWatts': liveWatts,
         'ratedMaxWatts': ratedMaxWatts,
@@ -64,10 +70,169 @@ class RealSmartDevice {
         if (lastError != null) 'lastError': lastError,
       };
 
+  void markOnlineSuccess() {
+    isOnline = true;
+    consecutiveFailedPolls = 0;
+    lastError = null;
+  }
+
   bool get isPowered => isOn;
   set isPowered(bool v) => isOn = v;
   String get cloudDeviceId => credentials['cloudDeviceId'] ?? credentials['devId'] ?? id;
-  bool get isDummy => credentials.isEmpty || credentials['vendor'] == 'demo';
+
+  bool get isLgThinq {
+    if (protocol == ConnectionProtocol.lgThinqCloud) return true;
+    final vendor = credentials['vendor']?.toString().toLowerCase().trim();
+    return vendor == 'lg_thinq' || vendor == 'lg' || vendor == 'thinq';
+  }
+
+  String get normalizedCategory {
+    final cat = category.toLowerCase().trim().replaceAll('-', '_').replaceAll(' ', '_');
+    if (cat == 'ac' ||
+        cat == 'air_conditioner' ||
+        cat == 'airconditioner' ||
+        cat == 'hvac' ||
+        cat == 'climate') {
+      return 'ac';
+    }
+    if (cat == 'washer' || cat == 'washing_machine' || cat == 'washtower') {
+      return 'washer';
+    }
+    if (cat == 'dryer') {
+      return 'dryer';
+    }
+    if (cat == 'fridge' || cat == 'refrigerator') {
+      return 'fridge';
+    }
+    if (cat == 'air_purifier' ||
+        cat == 'airpurifier' ||
+        cat == 'aerotower' ||
+        cat == 'purifier') {
+      return 'air_purifier';
+    }
+    if (cat == 'styler' || cat == 'steam_closet') {
+      return 'styler';
+    }
+    if (cat == 'dishwasher') {
+      return 'dishwasher';
+    }
+    if (cat == 'tv' || cat == 'television') {
+      return 'tv';
+    }
+    return cat;
+  }
+
+  bool get hasRealHardwareCredentials {
+    switch (protocol) {
+      case ConnectionProtocol.lgThinqCloud:
+        final token = credentials['token'];
+        return token != null &&
+            token.trim().isNotEmpty &&
+            token.trim().length > 10 &&
+            !token.toLowerCase().contains('demo');
+
+      case ConnectionProtocol.smartThingsCloud:
+        final token = credentials['token'];
+        return token != null &&
+            token.trim().isNotEmpty &&
+            token.trim().length > 10 &&
+            !token.toLowerCase().contains('demo');
+
+      case ConnectionProtocol.tuyaLocalLan:
+        final ip = credentials['ip'];
+        final localKey = credentials['localKey'];
+        return ip != null &&
+            ip.trim().isNotEmpty &&
+            !ip.toLowerCase().contains('demo') &&
+            localKey != null &&
+            localKey.trim().length == 16;
+
+      case ConnectionProtocol.tuyaCloudDirect:
+        final token = credentials['accessToken'] ?? credentials['token'];
+        return token != null &&
+            token.trim().isNotEmpty &&
+            token.trim().length > 5 &&
+            !token.toLowerCase().contains('demo');
+
+      case ConnectionProtocol.homeAssistantBridge:
+        final hubUrl = credentials['hubUrl'];
+        final token = credentials['token'];
+        return hubUrl != null &&
+            hubUrl.trim().isNotEmpty &&
+            !hubUrl.toLowerCase().contains('demo') &&
+            token != null &&
+            token.trim().isNotEmpty &&
+            !token.toLowerCase().contains('demo');
+
+      case ConnectionProtocol.onePlusTvLan:
+        final ip = credentials['ip'];
+        final vendor = credentials['vendor']?.toString().toLowerCase();
+        final isDemo = (credentials as dynamic)['isDemo']?.toString().toLowerCase() == 'true';
+        return ip != null &&
+            ip.trim().isNotEmpty &&
+            !ip.startsWith('127.') &&
+            ip.trim() != '0.0.0.0' &&
+            !ip.toLowerCase().contains('demo') &&
+            vendor != 'demo' &&
+            !isDemo;
+
+      case ConnectionProtocol.philipsHueLocal:
+        final bridgeIp = credentials['bridgeIp'] ?? credentials['ip'];
+        final username = credentials['username'];
+        return bridgeIp != null &&
+            bridgeIp.trim().isNotEmpty &&
+            !bridgeIp.toLowerCase().contains('demo') &&
+            username != null &&
+            username.trim().isNotEmpty &&
+            !username.toLowerCase().contains('demo');
+
+      case ConnectionProtocol.philipsWizUdp:
+        final ip = credentials['ip'];
+        final vendor = credentials['vendor']?.toString().toLowerCase();
+        final isDemo = (credentials as dynamic)['isDemo']?.toString().toLowerCase() == 'true';
+        return ip != null &&
+            ip.trim().isNotEmpty &&
+            !ip.startsWith('127.') &&
+            ip.trim() != '0.0.0.0' &&
+            !ip.toLowerCase().contains('demo') &&
+            vendor != 'demo' &&
+            !isDemo;
+
+      case ConnectionProtocol.customHttpWebhook:
+        final vendor = credentials['vendor']?.toLowerCase().trim();
+        if (vendor == 'lg_thinq' || vendor == 'lg' || vendor == 'thinq' || isLgThinq) {
+          final token = credentials['token'];
+          return token != null &&
+              token.trim().isNotEmpty &&
+              token.trim().length > 10 &&
+              !token.toLowerCase().contains('demo');
+        }
+        final url = credentials['controlUrl'] ?? credentials['onUrl'] ?? credentials['offUrl'];
+        return url != null &&
+            url.trim().isNotEmpty &&
+            !url.toLowerCase().contains('demo');
+
+      case ConnectionProtocol.rtspOnvifCamera:
+        final endpoint = credentials['ip'] ?? credentials['rtspUrl'];
+        final vendor = credentials['vendor']?.toString().toLowerCase();
+        final isDemo = (credentials as dynamic)['isDemo']?.toString().toLowerCase() == 'true';
+        return endpoint != null &&
+            endpoint.trim().isNotEmpty &&
+            !endpoint.toLowerCase().contains('demo') &&
+            vendor != 'demo' &&
+            !isDemo;
+    }
+  }
+
+  bool get isDummy {
+    if (hasRealHardwareCredentials) return false;
+    final vendor = credentials['vendor']?.toString().toLowerCase();
+    if (vendor == 'demo') return true;
+    final isDemoVal = (credentials as dynamic)['isDemo'];
+    if (isDemoVal == true || isDemoVal?.toString().toLowerCase() == 'true') return true;
+    if (credentials['token']?.toString().toLowerCase().contains('demo') == true) return true;
+    return false;
+  }
   String get statusSummary => isOnline ? (isOn ? 'On • ${primaryValue.round()}' : 'Off') : 'Offline';
   bool get ecoBubbleEnabled => liveAttributes['ecoBubble'] == true;
   bool get superSpeedEnabled => liveAttributes['superSpeed'] == true;
@@ -89,6 +254,103 @@ class RealSmartDevice {
   String get activeScene => liveAttributes['activeScene']?.toString() ?? 'Relax';
   bool get musicSyncActive => liveAttributes['musicSync'] == true;
   bool get jetCoolActive => liveAttributes['jetCool'] == true;
+  String get washerStage => liveAttributes['stage']?.toString() ?? (isOn ? 'wash' : 'idle');
+  int get rinseCount => int.tryParse(liveAttributes['rinseCount']?.toString() ?? '3') ?? 3;
+  String get waterTemp => liveAttributes['waterTemp']?.toString() ?? (liveAttributes['waterTemperature'] != null ? '${liveAttributes['waterTemperature']}°C' : '40°C');
+  String get spinSpeed => liveAttributes['spinSpeed']?.toString() ?? '1200 RPM';
+  bool get autoCycleLinkEnabled => liveAttributes['autoCycleLink'] == true;
+  bool get windFreeEnabled => liveAttributes['windFree'] == true;
+  bool get goodSleepActive => liveAttributes['goodSleep'] == true;
+  int get pm1AirQuality => int.tryParse(liveAttributes['pm1AirQuality']?.toString() ?? '12') ?? 12;
+  bool get aiEnergyMode => liveAttributes['aiEnergyMode'] == true;
+  double get fridgeTemp => double.tryParse(liveAttributes['fridgeTemp']?.toString() ?? '3.0') ?? 3.0;
+  double get freezerTemp => double.tryParse(liveAttributes['freezerTemp']?.toString() ?? '-19.0') ?? -19.0;
+  String get flexZoneMode => liveAttributes['flexZoneMode']?.toString() ?? 'Beverage';
+  bool get powerCool => liveAttributes['powerCool'] == true;
+  bool get powerFreeze => liveAttributes['powerFreeze'] == true;
+  bool get iceBitesEnabled => liveAttributes['iceBites'] == true;
+  bool get artModeEnabled => liveAttributes['artMode'] == true;
+  bool get lightSyncEnabled => liveAttributes['lightSync'] == true;
+  String get selectedArtwork => liveAttributes['selectedArtwork']?.toString() ?? 'Starry Night';
+
+  // LG WashTower & AI DD Washer / Dryer
+  bool get turboWash360Enabled => liveAttributes['turboWash360'] != false;
+  int get ezDispenseDetergentPercent => int.tryParse(liveAttributes['ezDispenseDetergent']?.toString() ?? '82') ?? 82;
+  int get ezDispenseSoftenerPercent => int.tryParse(liveAttributes['ezDispenseSoftener']?.toString() ?? '68') ?? 68;
+  bool get steamPlusEnabled => liveAttributes['steamPlus'] != false;
+  bool get smartPairingActive => liveAttributes['smartPairing'] != false;
+  String get dryerDryLevel => liveAttributes['dryLevel']?.toString() ?? 'Normal';
+  int get dryerRemainingMinutes => int.tryParse(liveAttributes['dryerRemainingMinutes']?.toString() ?? '34') ?? 34;
+  String get dryerStage => liveAttributes['dryerStage']?.toString() ?? 'drying';
+
+  // LG InstaView Refrigerator
+  bool get instaViewGlassTransparent => liveAttributes['instaViewTransparent'] == true;
+  bool get craftIceEnabled => liveAttributes['craftIce'] != false;
+  bool get doorCoolingActive => liveAttributes['doorCooling'] != false;
+  String get hygieneFreshMode => liveAttributes['hygieneFresh']?.toString() ?? 'Auto';
+  bool get expressFreezeActive => liveAttributes['expressFreeze'] == true;
+  bool get expressCoolActive => liveAttributes['expressCool'] == true;
+
+  // LG PuriCare AeroTower
+  int get cleanBoosterTiltAngle => int.tryParse(liveAttributes['cleanBoosterTilt']?.toString() ?? '55') ?? 55;
+  String get aeroTowerAirflowMode => liveAttributes['airflowMode']?.toString() ?? 'Wide';
+  bool get uvNanoEnabled => liveAttributes['uvNano'] != false;
+  int get pm1LaserIndex => int.tryParse(liveAttributes['pm1Laser']?.toString() ?? '9') ?? 9;
+  bool get petCareModeActive => liveAttributes['petCare'] == true;
+
+  // LG Styler Steam Closet
+  String get movingHangerSpeed => liveAttributes['movingHangerSpeed']?.toString() ?? 'Normal';
+  int get movingHangerRpm => int.tryParse(liveAttributes['movingHangerRpm']?.toString() ?? '180') ?? 180;
+  bool get trueSteamActive => liveAttributes['trueSteam'] != false;
+  bool get pantsCreaseCare => liveAttributes['pantsCrease'] != false;
+  bool get gentleDryActive => liveAttributes['gentleDry'] != false;
+  String get stylerCourse => liveAttributes['stylerCourse']?.toString() ?? 'Refresh';
+
+  // LG QuadWash Dishwasher
+  String get quadWashArmPressure => liveAttributes['quadWashArmPressure']?.toString() ?? 'Dual Zone';
+  bool get trueSteamDishwash => liveAttributes['trueSteamDishwash'] != false;
+  bool get autoDoorOpenDry => liveAttributes['autoDoorOpen'] != false;
+  String get dishwasherCourse => liveAttributes['dishwasherCourse']?.toString() ?? 'Auto';
+
+  // LG ThinQ UP & Smart Diagnosis
+  bool get thinqUpUpdateAvailable => liveAttributes['thinqUpUpdate'] != false;
+  String get thinqUpFeatureName => liveAttributes['thinqUpFeature']?.toString() ?? 'Pet Care Cycle & Gentle Dry Wave';
+  String get smartDiagnosisStatus => liveAttributes['smartDiagnosisStatus']?.toString() ?? 'Normal - 100% Component Health';
+  bool get smartDiagnosisAudioToneReady => liveAttributes['audioToneReady'] != false;
+
+  RealSmartDevice copyWith({
+    String? id,
+    String? name,
+    String? room,
+    String? category,
+    ConnectionProtocol? protocol,
+    Map<String, String>? credentials,
+    bool? isOn,
+    bool? isOnline,
+    int? consecutiveFailedPolls,
+    double? primaryValue,
+    double? liveWatts,
+    double? ratedMaxWatts,
+    Map<String, dynamic>? liveAttributes,
+    String? lastError,
+  }) {
+    return RealSmartDevice(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      room: room ?? this.room,
+      category: category ?? this.category,
+      protocol: protocol ?? this.protocol,
+      credentials: credentials ?? Map<String, String>.from(this.credentials),
+      isOn: isOn ?? this.isOn,
+      isOnline: isOnline ?? this.isOnline,
+      consecutiveFailedPolls: consecutiveFailedPolls ?? this.consecutiveFailedPolls,
+      primaryValue: primaryValue ?? this.primaryValue,
+      liveWatts: liveWatts ?? this.liveWatts,
+      ratedMaxWatts: ratedMaxWatts ?? this.ratedMaxWatts,
+      liveAttributes: liveAttributes ?? Map<String, dynamic>.from(this.liveAttributes),
+      lastError: lastError ?? this.lastError,
+    );
+  }
 
   factory RealSmartDevice.fromJson(Map<String, dynamic> json) {
     final rawCreds = json['credentials'];
@@ -111,18 +373,26 @@ class RealSmartDevice {
       }
     }
 
+    var proto = ConnectionProtocol.values.firstWhere(
+      (e) => e.name == json['protocol'],
+      orElse: () => ConnectionProtocol.smartThingsCloud,
+    );
+    final vendor = safeCreds['vendor']?.toLowerCase().trim();
+    if (proto == ConnectionProtocol.customHttpWebhook &&
+        (vendor == 'lg_thinq' || vendor == 'lg' || vendor == 'thinq')) {
+      proto = ConnectionProtocol.lgThinqCloud;
+    }
+
     return RealSmartDevice(
       id: (json['id'] ?? '').toString(),
       name: (json['name'] ?? 'Smart Device').toString(),
       room: (json['room'] ?? 'Living Room').toString(),
       category: (json['category'] ?? 'switch').toString(),
-      protocol: ConnectionProtocol.values.firstWhere(
-        (e) => e.name == json['protocol'],
-        orElse: () => ConnectionProtocol.smartThingsCloud,
-      ),
+      protocol: proto,
       credentials: safeCreds,
       isOn: json['isOn'] == true,
       isOnline: json['isOnline'] != false,
+      consecutiveFailedPolls: json['consecutiveFailedPolls'] as int? ?? 0,
       primaryValue: (json['primaryValue'] as num?)?.toDouble() ?? 24.0,
       liveWatts: (json['liveWatts'] as num?)?.toDouble() ?? 0.0,
       ratedMaxWatts: (json['ratedMaxWatts'] as num?)?.toDouble() ?? 0.0,
@@ -134,13 +404,49 @@ class RealSmartDevice {
 
 class RealIotController {
   static const String _stBase = 'https://api.smartthings.com/v1';
+  final http.Client? client;
+
+  RealIotController({this.client});
+
+  Future<http.Response> _get(Uri url, {Map<String, String>? headers}) {
+    final c = client;
+    return c != null ? c.get(url, headers: headers) : http.get(url, headers: headers);
+  }
+
+  Future<http.Response> _post(Uri url, {Map<String, String>? headers, Object? body, Encoding? encoding}) {
+    final c = client;
+    return c != null
+        ? c.post(url, headers: headers, body: body, encoding: encoding)
+        : http.post(url, headers: headers, body: body, encoding: encoding);
+  }
+
+  String _requireCredential(
+    RealSmartDevice device,
+    String key, {
+    List<String> fallbacks = const [],
+  }) {
+    final primary = device.credentials[key];
+    if (primary != null && primary.trim().isNotEmpty) {
+      return primary.trim();
+    }
+    for (final fb in fallbacks) {
+      final fallbackVal = device.credentials[fb];
+      if (fallbackVal != null && fallbackVal.trim().isNotEmpty) {
+        return fallbackVal.trim();
+      }
+    }
+    final keysDesc = fallbacks.isEmpty ? "'$key'" : "'$key' (or ${fallbacks.map((f) => "'$f'").join(', ')})";
+    throw Exception(
+      "Missing required credential $keysDesc for device '${device.name}' (${device.id}, protocol: ${device.protocol.name})",
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // 1. REAL SMARTTHINGS CLOUD IMPORT & CONTROL (NO DUMMY FALLBACKS)
   // ---------------------------------------------------------------------------
   Future<List<RealSmartDevice>> discoverSmartThingsDevices(String patToken) async {
     final cleanToken = patToken.trim();
-    final res = await http.get(
+    final res = await _get(
       Uri.parse('$_stBase/devices'),
       headers: {
         'Authorization': 'Bearer $cleanToken',
@@ -174,6 +480,14 @@ class RealIotController {
       String category = 'switch';
       if (capIds.contains('washerOperatingState') || label.toLowerCase().contains('washer')) {
         category = 'washer';
+      } else if (capIds.contains('dryerOperatingState') || label.toLowerCase().contains('dryer')) {
+        category = 'washer'; // dryer shares washer UI/wattage profile
+      } else if (capIds.contains('refrigeration') ||
+          label.toLowerCase().contains('fridge') ||
+          label.toLowerCase().contains('refrigerator')) {
+        // Samsung Family Hub exposes thermostatCoolingSetpoint — check fridge
+        // capability first so it is never misclassified as an AC (Bug 18).
+        category = 'fridge';
       } else if (capIds.contains('airConditionerMode') || capIds.contains('thermostatCoolingSetpoint')) {
         category = 'ac';
       } else if (capIds.contains('switchLevel') || capIds.contains('colorControl')) {
@@ -187,6 +501,8 @@ class RealIotController {
         ratedMax = 480.0;
       } else if (category == 'ac') {
         ratedMax = 1480.0;
+      } else if (category == 'fridge') {
+        ratedMax = 150.0;
       } else if (category == 'light') {
         ratedMax = 9.0;
       } else if (category == 'tv') {
@@ -202,11 +518,21 @@ class RealIotController {
         credentials: {'token': cleanToken},
         ratedMaxWatts: ratedMax,
       );
-
-      // Immediately pull real live state from SmartThings Cloud
-      await refreshDeviceStatus(dev);
       discovered.add(dev);
     }
+
+    // Parallelize initial status fetch — avoids N+1 sequential HTTP round-trips
+    // for each device's /health + /status calls (Bug 18).
+    await Future.wait(
+      discovered.map((dev) async {
+        try {
+          await refreshDeviceStatus(dev);
+        } catch (_) {
+          // Non-fatal: a device discovered but temporarily unreachable still
+          // appears in the list with isOnline = false.
+        }
+      }),
+    );
     return discovered;
   }
 
@@ -709,77 +1035,109 @@ class RealIotController {
   // 7. REAL HARDWARE STATUS POLLING
   // ---------------------------------------------------------------------------
   Future<void> refreshDeviceStatus(RealSmartDevice device) async {
+    if (device.isDummy && device.protocol != ConnectionProtocol.rtspOnvifCamera) {
+      device.markOnlineSuccess();
+      computeDeviceLiveWattage(device);
+      return;
+    }
     switch (device.protocol) {
       case ConnectionProtocol.smartThingsCloud:
-        final token = device.credentials['token'] ?? '';
+        final token = _requireCredential(device, 'token');
 
         // 1. Query SmartThings Health endpoint first
-        try {
-          final healthRes = await http.get(
-            Uri.parse('$_stBase/devices/${device.id}/health'),
-            headers: {'Authorization': 'Bearer $token'},
-          ).timeout(const Duration(seconds: 8));
+        final healthRes = await _get(
+          Uri.parse('$_stBase/devices/${device.id}/health'),
+          headers: {'Authorization': 'Bearer $token'},
+        ).timeout(const Duration(seconds: 8));
 
-          if (healthRes.statusCode == 200) {
-            final healthJson = jsonDecode(healthRes.body) as Map<String, dynamic>;
-            final healthState = healthJson['state']?.toString().toUpperCase();
-            if (healthState != 'ONLINE') {
-              device.isOnline = false;
-              device.isOn = false;
-              device.lastError = 'Device is $healthState';
-              break;
-            }
-          } else {
-            device.isOnline = false;
-            device.isOn = false;
-            device.lastError = 'SmartThings health check failed (${healthRes.statusCode})';
-            break;
+        if (healthRes.statusCode == 200) {
+          final healthJson = jsonDecode(healthRes.body) as Map<String, dynamic>;
+          final healthState = healthJson['state']?.toString().toUpperCase();
+          if (healthState != 'ONLINE') {
+            throw Exception('Device is $healthState');
           }
-        } catch (_) {
-          device.isOnline = false;
-          device.isOn = false;
-          break;
+        } else {
+          throw Exception('SmartThings health check failed (${healthRes.statusCode})');
         }
 
         // 2. Query SmartThings Status endpoint
-        final res = await http.get(
+        final res = await _get(
           Uri.parse('$_stBase/devices/${device.id}/status'),
           headers: {'Authorization': 'Bearer $token'},
         ).timeout(const Duration(seconds: 8));
 
         if (res.statusCode != 200) {
-          device.isOnline = false;
-          device.isOn = false;
           throw Exception('SmartThings status poll failed (${res.statusCode})');
         }
         final data = jsonDecode(res.body) as Map<String, dynamic>;
-        final main = (data['components']?['main'] ?? {}) as Map<String, dynamic>;
+        final allComponents = (data['components'] as Map<String, dynamic>?) ?? {};
+        final configuredComp = device.credentials['component']?.toString().trim();
+        Map<String, dynamic> comp = {};
+        if (configuredComp != null && configuredComp.isNotEmpty && allComponents.containsKey(configuredComp)) {
+          comp = (allComponents[configuredComp] as Map<String, dynamic>?) ?? {};
+        } else if (allComponents.containsKey('main')) {
+          comp = (allComponents['main'] as Map<String, dynamic>?) ?? {};
+        } else if (allComponents.isNotEmpty) {
+          comp = (allComponents.values.first as Map<String, dynamic>?) ?? {};
+        }
+        final mainComp = (allComponents['main'] as Map<String, dynamic>?) ?? comp;
 
         // Parse real switch state
-        final switchVal = main['switch']?['switch']?['value']?.toString().toLowerCase();
-        if (switchVal != null) {
-          device.isOn = (switchVal == 'on');
-        }
+        final switchVal = comp['switch']?['switch']?['value']?.toString().toLowerCase();
+
         // Parse real temperature or brightness
-        final coolingSetpoint = main['thermostatCoolingSetpoint']?['coolingSetpoint']?['value'];
-        final switchLevel = main['switchLevel']?['level']?['value'];
+        final coolingSetpoint = comp['thermostatCoolingSetpoint']?['coolingSetpoint']?['value'] ??
+            mainComp['thermostatCoolingSetpoint']?['coolingSetpoint']?['value'];
+        final switchLevel = comp['switchLevel']?['level']?['value'] ??
+            mainComp['switchLevel']?['level']?['value'];
         if (coolingSetpoint is num) device.primaryValue = coolingSetpoint.toDouble();
         if (switchLevel is num) device.primaryValue = switchLevel.toDouble();
 
-        // Parse real Samsung Washer operating state
-        final washerState = main['washerOperatingState']?['machineState']?['value']?.toString().toLowerCase();
-        final completionTime = main['washerOperatingState']?['completionTime']?['value'];
+        // Support washerOperatingState, dryerOperatingState, dishwasherOperatingState, operatingState
+        final opState = (comp['washerOperatingState'] as Map<String, dynamic>?) ??
+            (comp['dryerOperatingState'] as Map<String, dynamic>?) ??
+            (comp['dishwasherOperatingState'] as Map<String, dynamic>?) ??
+            (comp['operatingState'] as Map<String, dynamic>?) ??
+            (mainComp['washerOperatingState'] as Map<String, dynamic>?) ??
+            (mainComp['dryerOperatingState'] as Map<String, dynamic>?) ??
+            (mainComp['dishwasherOperatingState'] as Map<String, dynamic>?) ??
+            (mainComp['operatingState'] as Map<String, dynamic>?);
+
+        final machineState = opState?['machineState']?['value']?.toString().toLowerCase() ??
+            opState?['operatingState']?['value']?.toString().toLowerCase();
+
+        final jobState = opState?['washerJobState']?['value']?.toString().toLowerCase() ??
+            opState?['dryerJobState']?['value']?.toString().toLowerCase() ??
+            opState?['dishwasherJobState']?['value']?.toString().toLowerCase() ??
+            opState?['jobState']?['value']?.toString().toLowerCase();
+
+        final completionTime = opState?['completionTime']?['value'];
         final Map<String, dynamic> parsedAttrs = Map<String, dynamic>.from(device.liveAttributes);
-        if (washerState != null) parsedAttrs['machineState'] = washerState;
-        if (completionTime != null) parsedAttrs['completionTime'] = completionTime;
-        final washerWaterTemp = main['custom.washerWaterTemperature']?['washerWaterTemperature']?['value']?.toString();
+        if (machineState != null) parsedAttrs['machineState'] = machineState;
+        if (jobState != null) {
+          parsedAttrs['jobState'] = jobState;
+          parsedAttrs['stage'] = jobState;
+        }
+        if (completionTime != null) {
+          parsedAttrs['completionTime'] = completionTime;
+          final dt = DateTime.tryParse(completionTime.toString());
+          if (dt != null) {
+            final diff = dt.toUtc().difference(DateTime.now().toUtc()).inMinutes;
+            parsedAttrs['remainingMinutes'] = diff > 0 ? diff : 0;
+          }
+        }
+        final washerWaterTemp = comp['custom.washerWaterTemperature']?['washerWaterTemperature']?['value']?.toString() ??
+            mainComp['custom.washerWaterTemperature']?['washerWaterTemperature']?['value']?.toString();
         if (washerWaterTemp != null) parsedAttrs['waterTemperature'] = washerWaterTemp;
-        final washerSpinSpeed = main['custom.washerSpinSpeed']?['washerSpinSpeed']?['value']?.toString();
+        final washerSpinSpeed = comp['custom.washerSpinSpeed']?['washerSpinSpeed']?['value']?.toString() ??
+            mainComp['custom.washerSpinSpeed']?['washerSpinSpeed']?['value']?.toString();
         if (washerSpinSpeed != null) parsedAttrs['spinSpeed'] = washerSpinSpeed;
 
-        // Parse real SmartThings Power Meter & Consumption Report
-        final powerMeterVal = main['powerMeter']?['power']?['value'];
-        final powerReportVal = main['powerConsumptionReport']?['powerConsumption']?['value'];
+        // Parse real SmartThings Power Meter & Consumption Report (comp or fallback to mainComp for dual-drum shared mains telemetry)
+        final powerMeterVal = comp['powerMeter']?['power']?['value'] ??
+            mainComp['powerMeter']?['power']?['value'];
+        final powerReportVal = comp['powerConsumptionReport']?['powerConsumption']?['value'] ??
+            mainComp['powerConsumptionReport']?['powerConsumption']?['value'];
         if (powerMeterVal is num) {
           parsedAttrs['powerW'] = powerMeterVal.toDouble();
           parsedAttrs['powerSource'] = 'SmartThings Sensor';
@@ -796,18 +1154,62 @@ class RealIotController {
 
         device.liveAttributes = parsedAttrs;
 
-        // Even when isOnline == true, check switch & machineState:
-        if (switchVal == 'off' || washerState == 'stop') {
-          device.isOn = false;
+        // Resilient two-tier power state machine:
+        // Tier 1: Hardware switch takes definitive precedence if reported
+        if (switchVal != null) {
+          device.isOn = (switchVal == 'on');
+        } else {
+          // Tier 2: Infer power from appliance operating states or power draw
+          const activeStates = {
+            'run',
+            'running',
+            'pause',
+            'paused',
+            'wash',
+            'washing',
+            'rinse',
+            'rinsing',
+            'spin',
+            'spinning',
+            'dry',
+            'drying',
+            'damp',
+            'airwash',
+            'cooling',
+            'heating',
+            'weightSensing',
+            'delayWash',
+          };
+          const inactiveStates = {
+            'stop',
+            'stopped',
+            'finish',
+            'finished',
+            'ready',
+            'standby',
+            'idle',
+            'off',
+            'complete',
+            'completed',
+            'none',
+          };
+
+          if (machineState != null && activeStates.contains(machineState)) {
+            device.isOn = true;
+          } else if (machineState != null && inactiveStates.contains(machineState)) {
+            device.isOn = false;
+          } else {
+            final powerW = (parsedAttrs['powerW'] as num?)?.toDouble() ?? 0.0;
+            device.isOn = (powerW > 2.0 || device.category == 'fridge');
+          }
         }
 
-        device.isOnline = true;
-        device.lastError = null;
+        device.markOnlineSuccess();
         break;
 
       case ConnectionProtocol.homeAssistantBridge:
-        final hubUrl = device.credentials['hubUrl']!;
-        final token = device.credentials['token']!;
+        final hubUrl = _requireCredential(device, 'hubUrl');
+        final token = _requireCredential(device, 'token');
         final res = await http.get(
           Uri.parse('$hubUrl/api/states/${device.id}'),
           headers: {'Authorization': 'Bearer $token'},
@@ -824,7 +1226,7 @@ class RealIotController {
 
       case ConnectionProtocol.tuyaLocalLan:
       case ConnectionProtocol.onePlusTvLan:
-        final ip = device.credentials['ip'] ?? '';
+        final ip = _requireCredential(device, 'ip');
         final port = int.tryParse(
               device.credentials['port'] ??
                   (device.protocol == ConnectionProtocol.tuyaLocalLan ? '6668' : '8008'),
@@ -838,9 +1240,10 @@ class RealIotController {
         }
         break;
 
+      case ConnectionProtocol.lgThinqCloud:
       case ConnectionProtocol.customHttpWebhook:
-        if (device.credentials['vendor'] == 'lg_thinq') {
-          final token = device.credentials['token'] ?? '';
+        if (device.isLgThinq || device.credentials['vendor'] == 'lg_thinq' || device.credentials['vendor'] == 'lg') {
+          final token = _requireCredential(device, 'token');
           final country = device.credentials['country'] ?? 'IN';
           final gw = device.credentials['gatewayUrl'] ?? 'https://api-kic.lgthinq.com';
           final isAtToken = token.startsWith('at_');
@@ -902,7 +1305,7 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.tuyaCloudDirect:
-        final token = device.credentials['accessToken'] ?? '';
+        final token = _requireCredential(device, 'accessToken', fallbacks: ['token']);
         try {
           final res = await http.post(
             Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
@@ -953,79 +1356,61 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.philipsHueLocal:
-        final bridgeIp = device.credentials['bridgeIp'] ?? '';
-        final username = device.credentials['username'] ?? '';
-        final lightId = device.credentials['lightId'] ?? '';
-        try {
-          final res = await http
-              .get(Uri.parse('http://$bridgeIp/api/$username/lights/$lightId'))
-              .timeout(const Duration(seconds: 6));
-          if (res.statusCode == 200) {
-            final json = jsonDecode(res.body) as Map<String, dynamic>;
-            final state = (json['state'] as Map<String, dynamic>?) ?? {};
-            device.isOn = state['on'] == true;
-            device.isOnline = state['reachable'] != false;
-            final bri = (state['bri'] as num?)?.toDouble() ?? 254.0;
-            device.primaryValue = (bri / 2.54).clamp(1.0, 100.0);
-            device.liveAttributes = Map<String, dynamic>.from(state);
-            device.lastError = null;
-          } else {
-            device.isOnline = false;
+        final bridgeIp = _requireCredential(device, 'bridgeIp', fallbacks: ['ip']);
+        final username = _requireCredential(device, 'username');
+        final lightId = _requireCredential(device, 'lightId');
+        final res = await http
+            .get(Uri.parse('http://$bridgeIp/api/$username/lights/$lightId'))
+            .timeout(const Duration(seconds: 6));
+        if (res.statusCode == 200) {
+          final json = jsonDecode(res.body) as Map<String, dynamic>;
+          final state = (json['state'] as Map<String, dynamic>?) ?? {};
+          if (state['reachable'] == false) {
+            throw Exception('Hue light is unreachable');
           }
-        } catch (_) {
-          device.isOnline = false;
+          device.isOn = state['on'] == true;
+          final bri = (state['bri'] as num?)?.toDouble() ?? 254.0;
+          device.primaryValue = (bri / 2.54).clamp(1.0, 100.0);
+          device.liveAttributes = Map<String, dynamic>.from(state);
+          device.markOnlineSuccess();
+        } else {
+          throw Exception('Hue bridge status poll failed (${res.statusCode})');
         }
         break;
 
       case ConnectionProtocol.philipsWizUdp:
-        final ip = device.credentials['ip'] ?? '';
-        try {
-          final res = await _sendWizUdpPacket(
-            ip,
-            {'method': 'getPilot', 'params': {}},
-            timeoutMs: 2000,
-          );
-          if (res.containsKey('result')) {
-            final result = res['result'] as Map<String, dynamic>;
-            device.isOn = result['state'] == true;
-            device.isOnline = true;
-            device.primaryValue = (result['dimming'] as num?)?.toDouble() ?? 100.0;
-            device.liveAttributes = Map<String, dynamic>.from(result);
-            device.lastError = null;
-          } else {
-            device.isOnline = false;
-          }
-        } catch (_) {
-          device.isOnline = false;
+        final ip = _requireCredential(device, 'ip');
+        final res = await _sendWizUdpPacket(
+          ip,
+          {'method': 'getPilot', 'params': {}},
+          timeoutMs: 2000,
+        );
+        if (res.containsKey('result')) {
+          final result = res['result'] as Map<String, dynamic>;
+          device.isOn = result['state'] == true;
+          device.primaryValue = (result['dimming'] as num?)?.toDouble() ?? 100.0;
+          device.liveAttributes = Map<String, dynamic>.from(result);
+          device.markOnlineSuccess();
+        } else {
+          throw Exception('WiZ getPilot returned no result from $ip');
         }
         break;
 
       case ConnectionProtocol.rtspOnvifCamera:
-        final ip = device.credentials['ip'] ?? '';
+        final ip = _requireCredential(device, 'ip', fallbacks: ['rtspUrl']);
         final port = int.tryParse(device.credentials['port'] ?? '554') ?? 554;
+        Socket? s;
         try {
-          final s = await Socket.connect(ip, port, timeout: const Duration(seconds: 2));
-          try {
-            device.isOnline = true;
-            device.lastError = null;
-          } finally {
-            s.destroy();
-          }
+          s = await Socket.connect(ip, port, timeout: const Duration(seconds: 2));
         } catch (_) {
-          try {
-            final s80 = await Socket.connect(ip, 80, timeout: const Duration(seconds: 2));
-            try {
-              device.isOnline = true;
-              device.lastError = null;
-            } finally {
-              s80.destroy();
-            }
-          } catch (_) {
-            device.isOnline = false;
-          }
+          s = await Socket.connect(ip, 80, timeout: const Duration(seconds: 2));
+        } finally {
+          s?.destroy();
         }
+        device.markOnlineSuccess();
         break;
     }
+    device.markOnlineSuccess();
     computeDeviceLiveWattage(device);
   }
 
@@ -1158,18 +1543,194 @@ class RealIotController {
   // ---------------------------------------------------------------------------
   // 4. REAL HARDWARE COMMAND EXECUTION (THROWS ON FAILURE — NEVER FAKES STATE)
   // ---------------------------------------------------------------------------
-  Future<void> setPower(RealSmartDevice device, bool turnOn) async {
-    if (!device.isOnline) {
-      throw Exception('${device.name} is physically OFFLINE (check wall power / Wi-Fi).');
-    }
-    if (device.credentials['vendor'] == 'demo') {
+  Future<void> _dispatchLgPower(RealSmartDevice device, bool turnOn) async {
+    if (device.isDummy) {
       device.isOn = turnOn;
+      device.markOnlineSuccess();
+      computeDeviceLiveWattage(device);
+      return;
+    }
+
+    switch (device.normalizedCategory) {
+      case 'ac':
+        await ZeroTouchOnboardingService.instance.controlLgAirConditioner(
+          device: device,
+          powerOn: turnOn,
+        );
+        break;
+      case 'washer':
+        await ZeroTouchOnboardingService.instance.controlLgWashTower(
+          device,
+          {
+            'stage': turnOn ? 'wash' : 'idle',
+            'washerOperationMode': turnOn ? 'START' : 'STOP',
+          },
+        );
+        break;
+      case 'fridge':
+        await ZeroTouchOnboardingService.instance.controlLgFridge(
+          device,
+          {
+            'expressCool': turnOn,
+            'expressFreeze': turnOn,
+          },
+        );
+        break;
+      case 'air_purifier':
+        await ZeroTouchOnboardingService.instance.controlLgAeroTower(
+          device,
+          {
+            'airflowMode': turnOn ? 'Auto' : 'Off',
+            'uvNano': turnOn,
+          },
+        );
+        break;
+      case 'styler':
+        await ZeroTouchOnboardingService.instance.controlLgStyler(
+          device,
+          {
+            'gentleDry': turnOn,
+            'trueSteam': turnOn,
+          },
+        );
+        break;
+      case 'dishwasher':
+        await ZeroTouchOnboardingService.instance.controlLgDishwasher(
+          device,
+          {
+            'trueSteamDishwash': turnOn,
+          },
+        );
+        break;
+      case 'tv':
+        await ZeroTouchOnboardingService.instance.controlLgAppliance(
+          device: device,
+          commandPayload: {
+            'operation': {
+              'tvOperationMode': turnOn ? 'POWER_ON' : 'POWER_OFF',
+            },
+          },
+        );
+        break;
+      default:
+        await ZeroTouchOnboardingService.instance.controlLgAppliance(
+          device: device,
+          commandPayload: {
+            'operation': {
+              'operationMode': turnOn ? 'POWER_ON' : 'POWER_OFF',
+            },
+          },
+        );
+        break;
+    }
+
+    device.isOn = turnOn;
+  }
+
+  Future<void> _dispatchLgPrimaryLevel(RealSmartDevice device, double value) async {
+    if (device.isDummy) {
+      device.primaryValue = value;
+      device.markOnlineSuccess();
+      computeDeviceLiveWattage(device);
+      return;
+    }
+
+    switch (device.normalizedCategory) {
+      case 'ac':
+        final clamped = value.clamp(16.0, 30.0);
+        await ZeroTouchOnboardingService.instance.controlLgAirConditioner(
+          device: device,
+          targetCelsius: clamped,
+        );
+        device.primaryValue = clamped;
+        break;
+
+      case 'fridge':
+        final clamped = value.clamp(1.0, 7.0);
+        await ZeroTouchOnboardingService.instance.controlLgFridge(
+          device,
+          {'fridgeTemp': clamped.round()},
+        );
+        device.primaryValue = clamped;
+        break;
+
+      case 'air_purifier':
+        final clamped = value.clamp(0.0, 90.0);
+        await ZeroTouchOnboardingService.instance.controlLgAeroTower(
+          device,
+          {'cleanBoosterTilt': clamped.round()},
+        );
+        device.primaryValue = clamped;
+        break;
+
+      case 'styler':
+        final clamped = value.clamp(100.0, 220.0);
+        await ZeroTouchOnboardingService.instance.controlLgStyler(
+          device,
+          {'movingHangerRpm': clamped.round()},
+        );
+        device.primaryValue = clamped;
+        break;
+
+      case 'washer':
+        final spin = value.round();
+        await ZeroTouchOnboardingService.instance.controlLgAppliance(
+          device: device,
+          commandPayload: {
+            'washer': {
+              'operation': {'spinSpeed': spin},
+            },
+          },
+        );
+        device.primaryValue = value;
+        break;
+
+      case 'tv':
+        final vol = value.round().clamp(0, 100);
+        await ZeroTouchOnboardingService.instance.controlLgAppliance(
+          device: device,
+          commandPayload: {
+            'tv': {
+              'volume': vol,
+            },
+          },
+        );
+        device.primaryValue = vol.toDouble();
+        break;
+
+      default:
+        final bri = value.round().clamp(0, 100);
+        await ZeroTouchOnboardingService.instance.controlLgAppliance(
+          device: device,
+          commandPayload: {
+            'brightness': {
+              'brightness': bri,
+            },
+          },
+        );
+        device.primaryValue = bri.toDouble();
+        break;
+    }
+  }
+
+  Future<void> setPower(RealSmartDevice device, bool turnOn) async {
+    if (device.isDummy) {
+      device.isOn = turnOn;
+      device.markOnlineSuccess();
+      computeDeviceLiveWattage(device);
       return;
     }
     switch (device.protocol) {
+      case ConnectionProtocol.lgThinqCloud:
+        await _dispatchLgPower(device, turnOn);
+        break;
+
       case ConnectionProtocol.smartThingsCloud:
-        final token = device.credentials['token'] ?? '';
-        final res = await http.post(
+        final token = _requireCredential(device, 'token');
+        final targetComponent = (device.credentials['component']?.toString().trim().isNotEmpty == true)
+            ? device.credentials['component']!.toString().trim()
+            : 'main';
+        final res = await _post(
           Uri.parse('$_stBase/devices/${device.id}/commands'),
           headers: {
             'Authorization': 'Bearer $token',
@@ -1178,7 +1739,7 @@ class RealIotController {
           body: jsonEncode({
             'commands': [
               {
-                'component': 'main',
+                'component': targetComponent,
                 'capability': 'switch',
                 'command': turnOn ? 'on' : 'off',
               }
@@ -1191,10 +1752,18 @@ class RealIotController {
           break;
         }
 
-        // If device is a washer and switch rejected (e.g. 409 Conflict or 422 Unprocessable Entity),
-        // automatically fallback to washerOperatingState -> setMachineState('run' | 'stop')
-        if (device.category == 'washer' && (res.statusCode == 409 || res.statusCode == 422 || res.statusCode >= 400)) {
-          final fallbackRes = await http.post(
+        // If appliance and switch rejected (e.g. 409 Conflict, 422 Unprocessable Entity, or >= 400),
+        // automatically fallback to operating state -> setMachineState('run' | 'stop')
+        final isAppliance = device.category == 'washer' ||
+            device.category == 'dryer' ||
+            device.category == 'dishwasher';
+        if (isAppliance && (res.statusCode == 409 || res.statusCode == 422 || res.statusCode >= 400)) {
+          final fallbackCapability = device.category == 'dryer'
+              ? 'dryerOperatingState'
+              : (device.category == 'dishwasher'
+                  ? 'dishwasherOperatingState'
+                  : 'washerOperatingState');
+          final fallbackRes = await _post(
             Uri.parse('$_stBase/devices/${device.id}/commands'),
             headers: {
               'Authorization': 'Bearer $token',
@@ -1203,8 +1772,8 @@ class RealIotController {
             body: jsonEncode({
               'commands': [
                 {
-                  'component': 'main',
-                  'capability': 'washerOperatingState',
+                  'component': targetComponent,
+                  'capability': fallbackCapability,
                   'command': 'setMachineState',
                   'arguments': [turnOn ? 'run' : 'stop'],
                 }
@@ -1224,8 +1793,8 @@ class RealIotController {
         throw Exception('SmartThings rejected command (${res.statusCode}): ${res.body}');
 
       case ConnectionProtocol.homeAssistantBridge:
-        final hubUrl = device.credentials['hubUrl']!;
-        final token = device.credentials['token']!;
+        final hubUrl = _requireCredential(device, 'hubUrl');
+        final token = _requireCredential(device, 'token');
         final domain = device.credentials['domain'] ?? device.id.split('.').first;
         final service = turnOn ? 'turn_on' : 'turn_off';
 
@@ -1245,18 +1814,18 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.tuyaLocalLan:
-        final ip = device.credentials['ip'] ?? '';
+        final ip = _requireCredential(device, 'ip');
         final devId = device.id;
-        final localKey = device.credentials['localKey'] ?? '';
+        final localKey = _requireCredential(device, 'localKey');
         if (localKey.length != 16) {
-          throw Exception('Wipro/Tuya Local LAN requires a 16-character LocalKey.');
+          throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
         }
         await _sendTuyaEncryptedFrame(ip, devId, localKey, {'20': turnOn});
         device.isOn = turnOn;
         break;
 
       case ConnectionProtocol.onePlusTvLan:
-        final ip = device.credentials['ip'] ?? '';
+        final ip = _requireCredential(device, 'ip');
         // Trigger wake/standby or YouTube/Netflix DIAL launch over port 8008
         final uri = Uri.parse('http://$ip:8008/apps/YouTube');
         final res = turnOn
@@ -1269,10 +1838,18 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.customHttpWebhook:
+        if (device.isLgThinq) {
+          await _dispatchLgPower(device, turnOn);
+          break;
+        }
         final url = turnOn
-            ? (device.credentials['onUrl'] ?? '')
-            : (device.credentials['offUrl'] ?? '');
-        final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 6));
+            ? _requireCredential(device, 'onUrl', fallbacks: ['controlUrl', 'url'])
+            : _requireCredential(device, 'offUrl', fallbacks: ['controlUrl', 'url']);
+        final uri = Uri.tryParse(url);
+        if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+          throw Exception("Invalid webhook URL '$url' for device '${device.name}' (${device.id})");
+        }
+        final res = await http.get(uri).timeout(const Duration(seconds: 6));
         if (res.statusCode >= 400) {
           throw Exception('Webhook failed with HTTP ${res.statusCode}');
         }
@@ -1280,7 +1857,7 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.tuyaCloudDirect:
-        final token = device.credentials['accessToken'] ?? '';
+        final token = _requireCredential(device, 'accessToken', fallbacks: ['token']);
         final res = await http.post(
           Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
           headers: {'Content-Type': 'application/json'},
@@ -1309,9 +1886,9 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.philipsHueLocal:
-        final bridgeIp = device.credentials['bridgeIp'] ?? '';
-        final username = device.credentials['username'] ?? '';
-        final lightId = device.credentials['lightId'] ?? '';
+        final bridgeIp = _requireCredential(device, 'bridgeIp', fallbacks: ['ip']);
+        final username = _requireCredential(device, 'username');
+        final lightId = _requireCredential(device, 'lightId');
         final res = await http.put(
           Uri.parse('http://$bridgeIp/api/$username/lights/$lightId/state'),
           headers: {'Content-Type': 'application/json'},
@@ -1324,7 +1901,7 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.philipsWizUdp:
-        final ip = device.credentials['ip'] ?? '';
+        final ip = _requireCredential(device, 'ip');
         final res = await _sendWizUdpPacket(
           ip,
           {'method': 'setPilot', 'params': {'state': turnOn}},
@@ -1344,6 +1921,7 @@ class RealIotController {
         device.liveAttributes = attrs;
         break;
     }
+    device.markOnlineSuccess();
     computeDeviceLiveWattage(device);
   }
 
@@ -1352,14 +1930,17 @@ class RealIotController {
     String capability,
     String command, [
     List<dynamic> arguments = const [],
+    String? component,
   ]) async {
-    if (!device.isOnline) {
-      throw Exception('${device.name} is physically OFFLINE (check wall power / Wi-Fi).');
+    if (device.isDummy && device.protocol != ConnectionProtocol.rtspOnvifCamera) {
+      device.markOnlineSuccess();
+      return;
     }
     switch (device.protocol) {
       case ConnectionProtocol.smartThingsCloud:
-        final token = device.credentials['token'] ?? '';
-        final res = await http.post(
+        final token = _requireCredential(device, 'token');
+        final targetComponent = component ?? device.credentials['component'] ?? 'main';
+        final res = await _post(
           Uri.parse('$_stBase/devices/${device.id}/commands'),
           headers: {
             'Authorization': 'Bearer $token',
@@ -1368,7 +1949,7 @@ class RealIotController {
           body: jsonEncode({
             'commands': [
               {
-                'component': 'main',
+                'component': targetComponent,
                 'capability': capability,
                 'command': command,
                 'arguments': arguments,
@@ -1382,25 +1963,137 @@ class RealIotController {
         }
         break;
 
+      case ConnectionProtocol.tuyaLocalLan:
+        Map<String, dynamic> dps = {};
+        if (arguments.isNotEmpty && arguments.first is Map) {
+          dps = Map<String, dynamic>.from(arguments.first as Map);
+        } else {
+          dps = {command: arguments.isNotEmpty ? arguments.first : true};
+        }
+        await sendTuyaLocalDps(device, dps);
+        break;
+
+      case ConnectionProtocol.onePlusTvLan:
+        final ip = _requireCredential(device, 'ip');
+        final onePlus = OnePlusConnectService();
+        if (command == 'launchApp' && arguments.isNotEmpty) {
+          await onePlus.launchApp(tvId: device.id, appName: arguments.first.toString(), host: ip);
+        } else if (command == 'switchInput' && arguments.isNotEmpty) {
+          await onePlus.switchInput(tvId: device.id, inputSource: arguments.first.toString(), host: ip);
+        } else if (command == 'sendKey' || command == 'setVolume' || command == 'volume') {
+          final keyAction = arguments.isNotEmpty ? arguments.first.toString() : 'SELECT';
+          await onePlus.sendRemoteKey(tvId: device.id, keyAction: keyAction, host: ip);
+        } else {
+          await onePlus.sendRemoteKey(tvId: device.id, keyAction: command, host: ip);
+        }
+        break;
+
+      case ConnectionProtocol.lgThinqCloud:
+      case ConnectionProtocol.customHttpWebhook:
+        if (device.isLgThinq || device.credentials['vendor'] == 'lg_thinq' || device.credentials['vendor'] == 'lg') {
+          Map<String, dynamic> payload = {};
+          if (arguments.isNotEmpty && arguments.first is Map) {
+            payload = Map<String, dynamic>.from(arguments.first as Map);
+          } else {
+            payload = {
+              capability: {command: arguments.isNotEmpty ? arguments.first : true}
+            };
+          }
+          await ZeroTouchOnboardingService.instance.controlLgAppliance(
+            device: device,
+            commandPayload: payload,
+          );
+        } else {
+          final url = _requireCredential(device, 'controlUrl', fallbacks: ['onUrl', 'url']);
+          final uri = Uri.tryParse(url);
+          if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+            throw Exception("Invalid webhook URL '$url' for device '${device.name}' (${device.id})");
+          }
+          final res = await http.post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'capability': capability,
+              'command': command,
+              'arguments': arguments,
+            }),
+          ).timeout(const Duration(seconds: 6));
+          if (res.statusCode >= 400) {
+            throw Exception('Webhook command rejected (${res.statusCode})');
+          }
+        }
+        break;
+
       case ConnectionProtocol.homeAssistantBridge:
-        final hubUrl = device.credentials['hubUrl']!;
-        final token = device.credentials['token']!;
-        final res = await http.post(
-          Uri.parse('$hubUrl/api/services/$capability/$command'),
+        final hubUrl = _requireCredential(device, 'hubUrl');
+        final token = _requireCredential(device, 'token');
+        final cleanHubUrl = hubUrl.replaceAll(RegExp(r'/+$'), '');
+
+        final Map<String, dynamic> payload = {'entity_id': device.id};
+
+        if (arguments.isNotEmpty) {
+          final firstArg = arguments.first;
+          if (firstArg is Map) {
+            payload.addAll(Map<String, dynamic>.from(firstArg));
+          } else {
+            final cmd = command.toLowerCase();
+            final cap = capability.toLowerCase();
+
+            if (cap == 'climate' || cmd == 'set_temperature' || cmd == 'settemperature') {
+              payload['temperature'] = firstArg;
+            } else if (cap == 'media_player' &&
+                (cmd == 'select_source' || cmd == 'selectsource' || cmd == 'launchapp')) {
+              payload['source'] = firstArg;
+            } else if (cmd == 'volume_set' ||
+                cmd == 'set_volume' ||
+                cmd == 'setvolume' ||
+                (cap == 'media_player' && cmd == 'volume')) {
+              payload['volume_level'] = firstArg;
+            } else if (cap == 'fan' && (cmd == 'set_percentage' || cmd == 'setpercentage')) {
+              payload['percentage'] = firstArg;
+            } else if (cap == 'cover' &&
+                (cmd == 'set_cover_position' || cmd == 'set_position' || cmd == 'setposition')) {
+              payload['position'] = firstArg;
+            } else if (cmd == 'select_option' || cmd == 'selectoption') {
+              payload['option'] = firstArg;
+            } else if (cap == 'light' && firstArg is List) {
+              payload['rgb_color'] = firstArg;
+            } else if (cap == 'light' &&
+                arguments.length >= 3 &&
+                arguments.every((a) => a is num)) {
+              payload['rgb_color'] = arguments.sublist(0, 3);
+            } else if (cap == 'light' &&
+                (cmd == 'turn_on' ||
+                    cmd == 'turnon' ||
+                    cmd == 'set_brightness' ||
+                    cmd == 'setbrightness') &&
+                firstArg is num) {
+              payload['brightness_pct'] = firstArg;
+            } else {
+              payload['value'] = firstArg;
+              if (arguments.length > 1) {
+                payload['arguments'] = arguments;
+              }
+            }
+          }
+        }
+
+        final res = await _post(
+          Uri.parse('$cleanHubUrl/api/services/$capability/$command'),
           headers: {
             'Authorization': 'Bearer $token',
             'Content-Type': 'application/json',
           },
-          body: jsonEncode({'entity_id': device.id}),
+          body: jsonEncode(payload),
         ).timeout(const Duration(seconds: 8));
 
-        if (res.statusCode != 200) {
-          throw Exception('Hub command failed (${res.statusCode})');
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw Exception('Hub command failed (${res.statusCode}): ${res.body}');
         }
         break;
 
       case ConnectionProtocol.tuyaCloudDirect:
-        final token = device.credentials['accessToken'] ?? '';
+        final token = _requireCredential(device, 'accessToken', fallbacks: ['token']);
         final res = await http.post(
           Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
           headers: {'Content-Type': 'application/json'},
@@ -1424,9 +2117,9 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.philipsHueLocal:
-        final bridgeIp = device.credentials['bridgeIp'] ?? '';
-        final username = device.credentials['username'] ?? '';
-        final lightId = device.credentials['lightId'] ?? '';
+        final bridgeIp = _requireCredential(device, 'bridgeIp', fallbacks: ['ip']);
+        final username = _requireCredential(device, 'username');
+        final lightId = _requireCredential(device, 'lightId');
         Map<String, dynamic> body = {};
         if (command == 'setColor' && arguments.isNotEmpty) {
           if (arguments.first is List) {
@@ -1454,7 +2147,7 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.philipsWizUdp:
-        final ip = device.credentials['ip'] ?? '';
+        final ip = _requireCredential(device, 'ip');
         Map<String, dynamic> pilotParams = {};
         if (command == 'setPilot' && arguments.isNotEmpty && arguments.first is Map) {
           pilotParams = Map<String, dynamic>.from(arguments.first as Map);
@@ -1479,15 +2172,13 @@ class RealIotController {
           await setPower(device, !device.isOn);
         }
         break;
-
-      default:
-        break;
     }
+    device.markOnlineSuccess();
   }
 
   /// Sends ONVIF / HTTP PTZ Continuous Move or Relative Move command to smart camera
   Future<void> sendCameraPtzCommand(RealSmartDevice device, String direction) async {
-    final ip = device.credentials['ip'] ?? '';
+    final ip = _requireCredential(device, 'ip', fallbacks: ['rtspUrl']);
 
     // Update pan/tilt angle models in liveAttributes
     final attrs = Map<String, dynamic>.from(device.liveAttributes);
@@ -1551,14 +2242,27 @@ class RealIotController {
   }
 
   Future<void> setPrimaryLevel(RealSmartDevice device, double value) async {
+    if (device.isDummy) {
+      device.primaryValue = value;
+      device.markOnlineSuccess();
+      computeDeviceLiveWattage(device);
+      return;
+    }
     switch (device.protocol) {
+      case ConnectionProtocol.lgThinqCloud:
+        await _dispatchLgPrimaryLevel(device, value);
+        break;
+
       case ConnectionProtocol.smartThingsCloud:
-        final token = device.credentials['token'] ?? '';
+        final token = _requireCredential(device, 'token');
         final isClimate = device.category == 'ac';
         final capability = isClimate ? 'thermostatCoolingSetpoint' : 'switchLevel';
         final command = isClimate ? 'setCoolingSetpoint' : 'setLevel';
+        final targetComponent = (device.credentials['component']?.toString().trim().isNotEmpty == true)
+            ? device.credentials['component']!.toString().trim()
+            : 'main';
 
-        final res = await http.post(
+        final res = await _post(
           Uri.parse('$_stBase/devices/${device.id}/commands'),
           headers: {
             'Authorization': 'Bearer $token',
@@ -1567,7 +2271,7 @@ class RealIotController {
           body: jsonEncode({
             'commands': [
               {
-                'component': 'main',
+                'component': targetComponent,
                 'capability': capability,
                 'command': command,
                 'arguments': [value.round()],
@@ -1583,8 +2287,8 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.homeAssistantBridge:
-        final hubUrl = device.credentials['hubUrl']!;
-        final token = device.credentials['token']!;
+        final hubUrl = _requireCredential(device, 'hubUrl');
+        final token = _requireCredential(device, 'token');
         final isClimate = device.category == 'ac';
         final domain = isClimate ? 'climate' : 'light';
         final service = isClimate ? 'set_temperature' : 'turn_on';
@@ -1608,8 +2312,11 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.tuyaLocalLan:
-        final ip = device.credentials['ip'] ?? '';
-        final localKey = device.credentials['localKey'] ?? '';
+        final ip = _requireCredential(device, 'ip');
+        final localKey = _requireCredential(device, 'localKey');
+        if (localKey.length != 16) {
+          throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
+        }
         // Tuya DPS 22 is brightness (10 to 1000)
         await _sendTuyaEncryptedFrame(
           ip,
@@ -1621,7 +2328,7 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.tuyaCloudDirect:
-        final token = device.credentials['accessToken'] ?? '';
+        final token = _requireCredential(device, 'accessToken', fallbacks: ['token']);
         final clamped = value.round().clamp(1, 100);
         final res = await http.post(
           Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
@@ -1647,9 +2354,9 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.philipsHueLocal:
-        final bridgeIp = device.credentials['bridgeIp'] ?? '';
-        final username = device.credentials['username'] ?? '';
-        final lightId = device.credentials['lightId'] ?? '';
+        final bridgeIp = _requireCredential(device, 'bridgeIp', fallbacks: ['ip']);
+        final username = _requireCredential(device, 'username');
+        final lightId = _requireCredential(device, 'lightId');
         final bri = (value * 2.54).round().clamp(1, 254);
         final res = await http.put(
           Uri.parse('http://$bridgeIp/api/$username/lights/$lightId/state'),
@@ -1663,7 +2370,7 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.philipsWizUdp:
-        final ip = device.credentials['ip'] ?? '';
+        final ip = _requireCredential(device, 'ip');
         final clamped = value.round().clamp(10, 100);
         final res = await _sendWizUdpPacket(
           ip,
@@ -1675,6 +2382,14 @@ class RealIotController {
         device.primaryValue = value;
         break;
 
+      case ConnectionProtocol.customHttpWebhook:
+        if (device.isLgThinq) {
+          await _dispatchLgPrimaryLevel(device, value);
+          break;
+        }
+        device.primaryValue = value;
+        break;
+
       case ConnectionProtocol.rtspOnvifCamera:
         device.primaryValue = value;
         break;
@@ -1682,6 +2397,7 @@ class RealIotController {
       default:
         device.primaryValue = value;
     }
+    device.markOnlineSuccess();
     computeDeviceLiveWattage(device);
   }
 
@@ -1717,6 +2433,17 @@ class RealIotController {
         } catch (_) {}
       }
     }
+  }
+
+  /// Public helper for sending raw Tuya DPS frames over encrypted local LAN
+  Future<void> sendTuyaLocalDps(RealSmartDevice device, Map<String, dynamic> dpsMap) async {
+    if (device.isDummy) return;
+    final ip = _requireCredential(device, 'ip');
+    final localKey = _requireCredential(device, 'localKey');
+    if (localKey.length != 16) {
+      throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
+    }
+    await _sendTuyaEncryptedFrame(ip, device.id, localKey, dpsMap);
   }
 
   Future<void> _sendTuyaEncryptedFrame(

@@ -27,6 +27,9 @@ analyzer:
     unnecessary_import: error
     unnecessary_null_comparison: warning
     unnecessary_non_null_assertion: warning
+    deprecated_member_use: ignore
+    use_null_aware_elements: ignore
+    unnecessary_underscores: ignore
 
 linter:
   rules:

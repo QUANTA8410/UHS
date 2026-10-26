@@ -5,6 +5,8 @@ import 'package:http/http.dart' as http;
 import '../real_iot_controller.dart';
 
 class ZeroTouchOnboardingService {
+  static final ZeroTouchOnboardingService instance = ZeroTouchOnboardingService();
+
   // Official LG ThinQ Connect Open API Gateways (Asia/India: kic, Europe: eic, Americas: aic)
   static const String _lgDefaultApiKey = 'v6GFvkweNo7DK7yD3ylIZ9w52aKBU0eJ7wLXkSR3';
   static const List<String> _lgRegionalGateways = [
@@ -145,8 +147,9 @@ class ZeroTouchOnboardingService {
     bool? powerOn,
     double? targetCelsius,
     bool? jetCoolMode,
+    String? patTokenOverride,
   }) async {
-    final token = device.credentials['token'] ?? '';
+    final token = patTokenOverride ?? device.credentials['token'] ?? '';
     final country = device.credentials['country'] ?? 'IN';
     final gw = device.credentials['gatewayUrl'] ?? _lgRegionalGateways.first;
     final isAtToken = token.startsWith('at_');
@@ -195,6 +198,198 @@ class ZeroTouchOnboardingService {
     if (res.statusCode >= 400) {
       throw Exception('LG ThinQ Control Rejected (${res.statusCode}): ${res.body}');
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // LG THINQ CONNECT MULTI-APPLIANCE OPEN API CONTROLLER & HELPERS
+  // ---------------------------------------------------------------------------
+  Future<void> controlLgAppliance({
+    required RealSmartDevice device,
+    required Map<String, dynamic> commandPayload,
+    String? patTokenOverride,
+  }) async {
+    final token = patTokenOverride ?? device.credentials['token'] ?? '';
+    if (token.isEmpty || token.contains('demo') || device.isDummy) return;
+
+    final country = device.credentials['country'] ?? 'IN';
+    final gw = device.credentials['gatewayUrl'] ?? _lgRegionalGateways.first;
+    final isAtToken = token.startsWith('at_');
+
+    final Map<String, String> headers = isAtToken
+        ? {
+            'x-thinq-app-ver': '5.0.1000',
+            'x-thinq-app-type': 'NUTS',
+            'x-thinq-app-level': 'PRD',
+            'x-thinq-app-os': 'ANDROID',
+            'x-service-code': 'SVC202',
+            'x-country-code': country,
+            'x-language-code': 'en-$country',
+            'x-emp-token': token,
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          }
+        : {
+            'Authorization': 'Bearer $token',
+            'x-api-key': _lgDefaultApiKey,
+            'x-country': country,
+            'x-message-id': 'cmd-${DateTime.now().millisecondsSinceEpoch}',
+            'x-client-id': 'unified-smart-home-master',
+            'Content-Type': 'application/json',
+          };
+
+    final res = await http
+        .post(
+          Uri.parse('$gw/devices/${device.id}/control'),
+          headers: headers,
+          body: jsonEncode(commandPayload),
+        )
+        .timeout(const Duration(seconds: 8));
+
+    if (res.statusCode >= 400) {
+      throw Exception('LG ThinQ Control Rejected (${res.statusCode}): ${res.body}');
+    }
+  }
+
+  Future<void> controlLgWashTower(
+    RealSmartDevice dev,
+    Map<String, dynamic> attrs, {
+    String? patTokenOverride,
+  }) async {
+    final washerOp = <String, dynamic>{};
+    if (attrs['turboWash360'] != null) washerOp['turboWash360'] = attrs['turboWash360'];
+    if (attrs['ezDispenseDetergent'] != null) washerOp['ezDispenseDetergent'] = attrs['ezDispenseDetergent'];
+    if (attrs['ezDispenseSoftener'] != null) washerOp['ezDispenseSoftener'] = attrs['ezDispenseSoftener'];
+    if (attrs['steamPlus'] != null) washerOp['steamPlus'] = attrs['steamPlus'];
+    if (attrs['smartPairing'] != null) washerOp['smartPairing'] = attrs['smartPairing'];
+    if (attrs['stage'] != null) washerOp['stage'] = attrs['stage'];
+
+    final dryerOp = <String, dynamic>{};
+    if (attrs['dryLevel'] != null) dryerOp['dryLevel'] = attrs['dryLevel'];
+    if (attrs['dryerStage'] != null) dryerOp['dryerStage'] = attrs['dryerStage'];
+
+    final payload = <String, dynamic>{};
+    if (washerOp.isNotEmpty) payload['washer'] = {'operation': washerOp};
+    if (dryerOp.isNotEmpty) payload['dryer'] = {'operation': dryerOp};
+
+    if (payload.isNotEmpty) {
+      await controlLgAppliance(
+        device: dev,
+        commandPayload: payload,
+        patTokenOverride: patTokenOverride,
+      );
+    }
+  }
+
+  Future<void> controlLgFridge(
+    RealSmartDevice dev,
+    Map<String, dynamic> attrs, {
+    String? patTokenOverride,
+  }) async {
+    final payload = <String, dynamic>{};
+    final temps = <String, dynamic>{};
+    if (attrs['fridgeTemp'] != null) temps['targetFridgeTemperature'] = (attrs['fridgeTemp'] as num).round();
+    if (attrs['freezerTemp'] != null) temps['targetFreezerTemperature'] = (attrs['freezerTemp'] as num).round();
+    if (temps.isNotEmpty) {
+      temps['unit'] = 'C';
+      payload['temperature'] = temps;
+    }
+
+    final features = <String, dynamic>{};
+    if (attrs['instaViewTransparent'] != null) features['instaViewTransparent'] = attrs['instaViewTransparent'];
+    if (attrs['craftIce'] != null) features['craftIce'] = attrs['craftIce'];
+    if (attrs['doorCooling'] != null) features['doorCooling'] = attrs['doorCooling'];
+    if (attrs['hygieneFresh'] != null) features['hygieneFresh'] = attrs['hygieneFresh'];
+    if (attrs['expressFreeze'] != null) features['expressFreeze'] = attrs['expressFreeze'];
+    if (attrs['expressCool'] != null) features['expressCool'] = attrs['expressCool'];
+    if (features.isNotEmpty) payload['specialFeature'] = features;
+
+    if (payload.isNotEmpty) {
+      await controlLgAppliance(
+        device: dev,
+        commandPayload: payload,
+        patTokenOverride: patTokenOverride,
+      );
+    }
+  }
+
+  Future<void> controlLgAeroTower(
+    RealSmartDevice dev,
+    Map<String, dynamic> attrs, {
+    String? patTokenOverride,
+  }) async {
+    final purifier = <String, dynamic>{};
+    if (attrs['cleanBoosterTilt'] != null) purifier['cleanBoosterTilt'] = attrs['cleanBoosterTilt'];
+    if (attrs['airflowMode'] != null) purifier['airflowMode'] = attrs['airflowMode'];
+    if (attrs['uvNano'] != null) purifier['uvNano'] = attrs['uvNano'];
+    if (attrs['petCare'] != null) purifier['petCare'] = attrs['petCare'];
+
+    if (purifier.isNotEmpty) {
+      await controlLgAppliance(
+        device: dev,
+        commandPayload: {'airPurifier': purifier},
+        patTokenOverride: patTokenOverride,
+      );
+    }
+  }
+
+  Future<void> controlLgStyler(
+    RealSmartDevice dev,
+    Map<String, dynamic> attrs, {
+    String? patTokenOverride,
+  }) async {
+    final styler = <String, dynamic>{};
+    if (attrs['movingHangerSpeed'] != null) styler['movingHangerSpeed'] = attrs['movingHangerSpeed'];
+    if (attrs['movingHangerRpm'] != null) styler['movingHangerRpm'] = attrs['movingHangerRpm'];
+    if (attrs['trueSteam'] != null) styler['trueSteam'] = attrs['trueSteam'];
+    if (attrs['pantsCrease'] != null) styler['pantsCrease'] = attrs['pantsCrease'];
+    if (attrs['gentleDry'] != null) styler['gentleDry'] = attrs['gentleDry'];
+    if (attrs['stylerCourse'] != null) styler['stylerCourse'] = attrs['stylerCourse'];
+
+    if (styler.isNotEmpty) {
+      await controlLgAppliance(
+        device: dev,
+        commandPayload: {'styler': styler},
+        patTokenOverride: patTokenOverride,
+      );
+    }
+  }
+
+  Future<void> controlLgDishwasher(
+    RealSmartDevice dev,
+    Map<String, dynamic> attrs, {
+    String? patTokenOverride,
+  }) async {
+    final dishwasher = <String, dynamic>{};
+    if (attrs['quadWashArmPressure'] != null) dishwasher['quadWashArmPressure'] = attrs['quadWashArmPressure'];
+    if (attrs['trueSteamDishwash'] != null) dishwasher['trueSteamDishwash'] = attrs['trueSteamDishwash'];
+    if (attrs['autoDoorOpen'] != null) dishwasher['autoDoorOpen'] = attrs['autoDoorOpen'];
+    if (attrs['dishwasherCourse'] != null) dishwasher['dishwasherCourse'] = attrs['dishwasherCourse'];
+
+    if (dishwasher.isNotEmpty) {
+      await controlLgAppliance(
+        device: dev,
+        commandPayload: {'dishwasher': dishwasher},
+        patTokenOverride: patTokenOverride,
+      );
+    }
+  }
+
+  Future<void> activateLgThinqUpFeature(
+    RealSmartDevice dev,
+    String featureName, {
+    String? patTokenOverride,
+  }) async {
+    await controlLgAppliance(
+      device: dev,
+      commandPayload: {
+        'thinqUp': {
+          'feature': featureName,
+          'action': 'INSTALL_AND_ACTIVATE',
+          'timestamp': DateTime.now().toIso8601String(),
+        }
+      },
+      patTokenOverride: patTokenOverride,
+    );
   }
 
   // ---------------------------------------------------------------------------

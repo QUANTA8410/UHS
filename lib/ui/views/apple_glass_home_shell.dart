@@ -13,9 +13,15 @@ import '../widgets/dialogs/brand_oauth_webview_sheet.dart';
 import '../widgets/dialogs/camera_cockpit_sheet.dart';
 import '../widgets/dialogs/node_server_dashboard_sheet.dart';
 import '../widgets/dialogs/smart_rule_studio_sheet.dart';
+import '../widgets/dialogs/universal_qr_scanner_sheet.dart';
 import '../widgets/energy/animated_power_flow_card.dart';
 import '../widgets/map3d/floor_plan_editor_sheet.dart';
 import '../widgets/map3d/isometric_house_3d_widget.dart';
+import '../widgets/sheets/samsung_washer_sheet.dart';
+import '../widgets/sheets/samsung_future_devices_sheet.dart';
+import '../widgets/sheets/lg_thinq_ac_sheet.dart';
+import '../widgets/sheets/lg_future_appliances_sheet.dart';
+import '../widgets/cards/house_control_device_tile.dart';
 
 class AppleGlassHomeShell extends StatefulWidget {
   const AppleGlassHomeShell({super.key});
@@ -57,6 +63,11 @@ class _AppleGlassHomeShellState extends State<AppleGlassHomeShell> {
             onPressed: () => home.syncAllDevicesSilent(),
           ),
           IconButton(
+            tooltip: 'Scan Appliance QR Code',
+            icon: const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFF00D4FF)),
+            onPressed: () => UniversalQrScannerSheet.show(context),
+          ),
+          IconButton(
             tooltip: '24/7 Android Hub Node Server',
             icon: Icon(
               Icons.dns_rounded,
@@ -84,39 +95,44 @@ class _AppleGlassHomeShellState extends State<AppleGlassHomeShell> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        alignment: Alignment.topCenter,
         children: [
-          if (home.lastGlobalError != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: GlassContainer(
-                borderRadius: 16,
-                isActive: true,
-                activeTint: const Color(0xFFFF453A),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                child: Row(
-                  children: [
-                    const Icon(Icons.error_outline_rounded, color: Color(0xFFFF453A)),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        home.lastGlobalError!,
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
-                      ),
+          Column(
+            children: [
+              if (home.lastGlobalError != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: GlassContainer(
+                    borderRadius: 16,
+                    isActive: true,
+                    activeTint: const Color(0xFFFF453A),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error_outline_rounded, color: Color(0xFFFF453A)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            home.lastGlobalError!,
+                            style: const TextStyle(color: Colors.white, fontSize: 12),
+                          ),
+                        ),
+                      ],
                     ),
+                  ),
+                ),
+              Expanded(
+                child: IndexedStack(
+                  index: _tabIndex,
+                  children: const [
+                    _GlassDashboardTab(),
+                    _Interactive3DMapTab(),
+                    _FunctionalAutomationsTab(),
                   ],
                 ),
               ),
-            ),
-          Expanded(
-            child: IndexedStack(
-              index: _tabIndex,
-              children: const [
-                _GlassDashboardTab(),
-                _Interactive3DMapTab(),
-                _FunctionalAutomationsTab(),
-              ],
-            ),
+            ],
           ),
         ],
       ),
@@ -200,6 +216,7 @@ class _GlassDashboardTab extends StatefulWidget {
 class _GlassDashboardTabState extends State<_GlassDashboardTab> {
   bool _showPowerFlow = false;
   String _selectedRoom = 'All';
+  String _activeScene = 'Cozy';
   House3DTwinLayout _houseLayout = House3DTwinLayout.defaultApartment();
 
   @override
@@ -237,6 +254,49 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
                   'Tap "Pair Device" in the top right to connect your real Samsung SmartThings account, LG ThinQ PAT, Universal Home Assistant bridge, Wipro Smart Bulb, or OnePlus TV.',
                   textAlign: TextAlign.center,
                 ),
+                const SizedBox(height: 20),
+                GlassContainer(
+                  borderRadius: 22,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  isActive: true,
+                  activeTint: const Color(0xFF00D4FF),
+                  onTap: () {
+                    UniversalQrScannerSheet.show(context);
+                  },
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.qr_code_scanner_rounded, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Scan Appliance QR Code',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13.5),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                GlassContainer(
+                  borderRadius: 22,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  isActive: true,
+                  activeTint: const Color(0xFF0A84FF),
+                  onTap: () async {
+                    HapticFeedback.heavyImpact();
+                    await home.loadSampleSmartHome();
+                  },
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Load Sample Smart Home (Samsung & LG)',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13.5),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -250,182 +310,346 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
             .where((d) => d.room.toLowerCase().contains(_selectedRoom.toLowerCase()))
             .toList();
 
+    final acDevice = devices.cast<RealSmartDevice?>().firstWhere(
+          (d) => d?.category == 'ac' || d?.name.toLowerCase().contains('ac') == true,
+          orElse: () => null,
+        );
+    final double acTemp =
+        acDevice != null && acDevice.primaryValue > 0 ? acDevice.primaryValue : 23.5;
+
     return CustomScrollView(
       slivers: [
-        // 1. Glass Whisper Briefing & Subtitle
+        // =====================================================================
+        // 1. HERO 3D STAGE (.stage) & OVERLAID TOP HEADER (header.top)
+        // =====================================================================
         SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Welcome Home',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.6,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '$activeCount devices active • ${home.isUserAtHome ? "Home Wi-Fi Locked" : "Away Mode"}',
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white70,
-                      ),
-                    ),
-                  ],
-                ),
-                GlassContainer(
-                  borderRadius: 18,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  onTap: () => setState(() => _showPowerFlow = !_showPowerFlow),
-                  child: Row(
-                    children: [
-                      Icon(
-                        _showPowerFlow ? Icons.bolt_rounded : Icons.energy_savings_leaf_rounded,
-                        size: 15,
-                        color: const Color(0xFF30D158),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _showPowerFlow ? 'Energy Topology' : 'Show Energy',
-                        style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ),
+          child: Container(
+            height: 380,
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF090E1D),
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 1.2),
+              boxShadow: const [
+                BoxShadow(color: Colors.black54, blurRadius: 28, offset: Offset(0, 10)),
               ],
             ),
-          ),
-        ),
-
-        // 2. Top 3D Isometric Dollhouse Header
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 6, 18, 10),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(28),
-              child: Container(
-                height: 285,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF090E1D),
-                  border: Border.all(color: Colors.white12, width: 1.2),
-                  borderRadius: BorderRadius.circular(28),
-                  boxShadow: const [
-                    BoxShadow(color: Colors.black54, blurRadius: 24, offset: Offset(0, 8)),
-                  ],
-                ),
-                child: Stack(
-                  children: [
-                    RepaintBoundary(
-                      child: IsometricHouse3DWidget(
-                        height: 285,
-                        layout: _houseLayout,
-                        selectedRoomId: _selectedRoom == 'All' ? 'all' : _selectedRoom.toLowerCase(),
-                        onRoomSelected: (r) => setState(() =>
-                            _selectedRoom = r == 'all' ? 'All' : (r[0].toUpperCase() + r.substring(1))),
-                        onFixtureLongPress: (fix, dev) {
-                          if (dev != null) _showDeviceControlSheet(context, dev);
-                        },
-                        onOpenBlueprintEditor: () async {
-                          final updated = await FloorPlanEditorSheet.show(context, layout: _houseLayout);
-                          if (updated != null) {
-                            setState(() => _houseLayout = updated);
-                          }
-                        },
-                      ),
+              borderRadius: BorderRadius.circular(27),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Interactive 3D Dollhouse Model
+                  RepaintBoundary(
+                    child: IsometricHouse3DWidget(
+                      height: 380,
+                      layout: _houseLayout,
+                      selectedRoomId: _selectedRoom == 'All' ? 'all' : _selectedRoom.toLowerCase(),
+                      onRoomSelected: (r) => setState(() =>
+                          _selectedRoom = r == 'all' ? 'All' : (r[0].toUpperCase() + r.substring(1))),
+                      onFixtureLongPress: (fix, dev) {
+                        if (dev != null) _showDeviceControlSheet(context, dev);
+                      },
+                      onOpenBlueprintEditor: () async {
+                        final updated = await FloorPlanEditorSheet.show(context, layout: _houseLayout);
+                        if (updated != null) {
+                          setState(() => _houseLayout = updated);
+                        }
+                      },
                     ),
-                    Positioned(
-                      top: 12,
-                      left: 14,
-                      child: GlassContainer(
-                        borderRadius: 16,
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.apartment_rounded, size: 14, color: Color(0xFF0A84FF)),
-                            const SizedBox(width: 5),
-                            Text(
-                              _selectedRoom == 'All' ? '3D Isometric Twin' : '$_selectedRoom Camera Zoom',
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                            ),
-                          ],
+                  ),
+
+                  // Bottom Gradient Fade into Dark Panel Background
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: 80,
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              const Color(0xFF090E1D).withValues(alpha: 0.8),
+                              const Color(0xFF090E1D),
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                    Positioned(
-                      bottom: 12,
-                      right: 14,
-                      child: GlassContainer(
-                        borderRadius: 16,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        activeTint: const Color(0xFFFF453A),
-                        isActive: devices.any((d) => d.isOn),
-                        onTap: () async {
-                          HapticFeedback.heavyImpact();
-                          final anyOn = devices.any((d) => d.isOn);
-                          for (final d in devices) {
-                            if (anyOn && d.isOn) {
-                              await home.toggleDevicePower(d);
-                            } else if (!anyOn && !d.isOn) {
-                              await home.toggleDevicePower(d);
+                  ),
+
+                  // Overlaid House Control Top Header (header.top)
+                  Positioned(
+                    top: 14,
+                    left: 14,
+                    right: 14,
+                    child: Row(
+                      children: [
+                        // .home-badge (38x38 squircle, radius 12)
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.50),
+                            borderRadius: BorderRadius.circular(13),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+                            boxShadow: const [
+                              BoxShadow(color: Colors.black38, blurRadius: 8, offset: Offset(0, 2)),
+                            ],
+                          ),
+                          child: const Icon(Icons.home_rounded, color: Colors.white, size: 21),
+                        ),
+                        const SizedBox(width: 10),
+
+                        // Title column: "My Home" + Live pulsating green dot & telemetry
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text(
+                                'My Home',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: -0.4,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Row(
+                                children: [
+                                  // Pulsing Green Live Dot
+                                  Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF30D158),
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: const Color(0xFF30D158).withValues(alpha: 0.8),
+                                          blurRadius: 6,
+                                          spreadRadius: 1,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    '$activeCount active · ${acTemp.toStringAsFixed(acTemp.truncateToDouble() == acTemp ? 0 : 1)}°C',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white70,
+                                      letterSpacing: -0.2,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Blueprint 2D Editor Button
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () async {
+                            HapticFeedback.lightImpact();
+                            final updated = await FloorPlanEditorSheet.show(context, layout: _houseLayout);
+                            if (updated != null) setState(() => _houseLayout = updated);
+                          },
+                          child: Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.50),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+                            ),
+                            child: const Icon(Icons.layers_outlined, color: Colors.white, size: 19),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+
+                        // Energy Topology Toggle Button
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            HapticFeedback.lightImpact();
+                            setState(() => _showPowerFlow = !_showPowerFlow);
+                          },
+                          child: Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: _showPowerFlow
+                                  ? const Color(0xFF30D158).withValues(alpha: 0.28)
+                                  : Colors.black.withValues(alpha: 0.50),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: _showPowerFlow
+                                    ? const Color(0xFF30D158)
+                                    : Colors.white.withValues(alpha: 0.16),
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.bolt_rounded,
+                              color: _showPowerFlow ? const Color(0xFF30D158) : Colors.white,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+
+                        // Iconic Circular Master Power Button (.power)
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () async {
+                            HapticFeedback.heavyImpact();
+                            final anyOn = devices.any((d) => d.isOn);
+                            for (final d in devices) {
+                              if (anyOn && d.isOn) {
+                                await home.toggleDevicePower(d);
+                              } else if (!anyOn && !d.isOn) {
+                                await home.toggleDevicePower(d);
+                              }
                             }
-                          }
-                        },
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 280),
+                            width: 46,
+                            height: 46,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: activeCount > 0
+                                  ? const LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: [Color(0xFF5AA2FF), Color(0xFF2F7BF2)],
+                                    )
+                                  : LinearGradient(
+                                      colors: [
+                                        Colors.white.withValues(alpha: 0.14),
+                                        Colors.white.withValues(alpha: 0.07),
+                                      ],
+                                    ),
+                              border: Border.all(
+                                color: activeCount > 0
+                                    ? const Color(0xFF90C2FF)
+                                    : Colors.white.withValues(alpha: 0.16),
+                                width: 1.2,
+                              ),
+                              boxShadow: [
+                                if (activeCount > 0)
+                                  BoxShadow(
+                                    color: const Color(0xFF2F7BF2).withValues(alpha: 0.55),
+                                    blurRadius: 16,
+                                    spreadRadius: 2,
+                                  ),
+                              ],
+                            ),
+                            child: Icon(
+                              Icons.power_settings_new_rounded,
+                              size: 22,
+                              color: activeCount > 0 ? Colors.white : Colors.white54,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Floating 3D Camera / Room Focus Pill at Bottom of Stage
+                  Positioned(
+                    bottom: 14,
+                    left: 16,
+                    child: GestureDetector(
+                      onTap: () {
+                        if (_selectedRoom != 'All') {
+                          HapticFeedback.selectionClick();
+                          setState(() => _selectedRoom = 'All');
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5.5),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.60),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                        ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
-                              Icons.power_settings_new_rounded,
-                              size: 14,
-                              color: devices.any((d) => d.isOn) ? const Color(0xFFFF453A) : Colors.white70,
+                              _selectedRoom == 'All'
+                                  ? Icons.center_focus_strong_rounded
+                                  : Icons.zoom_in_rounded,
+                              size: 13,
+                              color: const Color(0xFF5AA2FF),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 5),
                             Text(
-                              devices.any((d) => d.isOn) ? 'Master Off' : 'Master On',
+                              _selectedRoom == 'All'
+                                  ? '3D Spatial Twin • Drag to Orbit'
+                                  : '$_selectedRoom Camera Zoom • Tap to Reset',
                               style: const TextStyle(
-                                  color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ],
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
         ),
 
-        // 3. Five One-Tap Mood Scene Pills (Bright, Cozy, Movie, Night, Away)
+        // =====================================================================
+        // 2. SCENES ROW (.scenes - Bright, Cozy, Movie, Night, Away)
+        // =====================================================================
         SliverToBoxAdapter(
-          child: _build5MoodSceneRibbon(context, home),
+          child: _buildHouseControlScenes(context, home),
         ),
 
-        // 4. Room Camera Zoom Filter Bar (All, Living, Dining, Kitchen, Bedroom, Bathroom) + All on / All off
+        // =====================================================================
+        // 3. ROOMS FILTER ROW (.rooms with glowing active device count badge)
+        // =====================================================================
         SliverToBoxAdapter(
-          child: _buildRoomCameraFilterBar(context, home),
+          child: _buildHouseControlRooms(context, home),
         ),
 
-        // 5. Collapsible Animated Tesla-Style Power Flow Card
+        // =====================================================================
+        // 4. LIST HEAD (.list-head with room name & All on / All off pills)
+        // =====================================================================
+        SliverToBoxAdapter(
+          child: _buildHouseControlListHead(context, home, filteredDevices.length),
+        ),
+
+        // =====================================================================
+        // 5. OPTIONAL COLLAPSIBLE TESLA-STYLE POWER FLOW CARD
+        // =====================================================================
         if (_showPowerFlow)
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
               child: AnimatedPowerFlowCard(devices: devices),
             ),
           ),
 
-        // 6. Universal 12-Category Animated Glass Grid Cards (Filtered by Selected Room)
+        // =====================================================================
+        // 6. DEVICES GRID (.devices - 76px HouseControlDeviceTile)
+        // =====================================================================
         if (filteredDevices.isEmpty)
           SliverToBoxAdapter(
             child: Padding(
@@ -453,38 +677,34 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
           )
         else
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(18, 4, 18, 120),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                mainAxisSpacing: 16,
-                crossAxisSpacing: 16,
-                childAspectRatio: 0.98,
-              ),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 120),
+            sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final dev = filteredDevices[index];
-                  final inFlight = home.networkEngine.isDeviceInFlight(dev.id);
 
-                  return RepaintBoundary(
-                    child: UniversalAnimatedGlassCard(
-                      device: dev,
-                      isSyncing: inFlight,
-                      onTap: () => _showDeviceControlSheet(context, dev),
-                      onPowerToggle: () async {
-                        HapticFeedback.mediumImpact();
-                        try {
-                          await home.toggleDevicePower(dev);
-                        } catch (e) {
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Hardware Error: $e')),
-                            );
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: RepaintBoundary(
+                      child: HouseControlDeviceTile(
+                        device: dev,
+                        onTap: () => _showDeviceControlSheet(context, dev),
+                        onPowerToggle: () async {
+                          HapticFeedback.mediumImpact();
+                          try {
+                            await home.toggleDevicePower(dev);
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Hardware Error: $e')),
+                              );
+                            }
                           }
-                        }
-                      },
-                      onLongPress: () => _showDeviceControlSheet(context, dev),
-                      onHorizontalLevelDrag: (val) => home.setDeviceLevel(dev, val),
+                        },
+                        onLongPress: () => _showDeviceControlSheet(context, dev),
+                        onLevelChanged: (val) => home.setDeviceLevel(dev, val),
+                        onTempChanged: (temp) => home.setDeviceLevel(dev, temp),
+                      ),
                     ),
                   );
                 },
@@ -496,231 +716,344 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
     );
   }
 
-  Widget _build5MoodSceneRibbon(BuildContext context, RealHomeProvider home) {
+  Widget _buildHouseControlScenes(BuildContext context, RealHomeProvider home) {
+    final scenes = [
+      (id: 'Bright', name: 'Bright', icon: Icons.wb_sunny_rounded, color: const Color(0xFFFFD60A)),
+      (id: 'Cozy', name: 'Cozy', icon: Icons.local_cafe_rounded, color: const Color(0xFFFF9F0A)),
+      (id: 'Movie', name: 'Movie', icon: Icons.movie_rounded, color: const Color(0xFFBF5AF2)),
+      (id: 'Night', name: 'Night', icon: Icons.bedtime_rounded, color: const Color(0xFF5E5CE6)),
+      (id: 'Away', name: 'Away', icon: Icons.sensor_door_outlined, color: const Color(0xFFFF453A)),
+    ];
+
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Row(
-        children: [
-          _scenePill(
-            label: '☀️ Bright',
-            tint: const Color(0xFFFFD60A),
-            onTap: () async {
-              HapticFeedback.heavyImpact();
-              for (final d in home.devices) {
-                if (d.category == 'light') {
-                  if (!d.isOn) await home.toggleDevicePower(d);
-                  await home.setDeviceLevel(d, 100.0);
-                } else if (d.category == 'ac') {
-                  if (!d.isOn) await home.toggleDevicePower(d);
-                  await home.setDeviceLevel(d, 22.0);
-                }
-              }
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('☀️ Scene: Bright 100% Warm White & 22°C Cool')),
-                );
-              }
-            },
-          ),
-          const SizedBox(width: 8),
-          _scenePill(
-            label: '🕯️ Cozy',
-            tint: const Color(0xFFFF9F0A),
-            onTap: () async {
-              HapticFeedback.heavyImpact();
-              for (final d in home.devices) {
-                if (d.category == 'light') {
-                  if (!d.isOn) await home.toggleDevicePower(d);
-                  await home.setDeviceLevel(d, 60.0);
-                } else if (d.category == 'ac') {
-                  if (!d.isOn) await home.toggleDevicePower(d);
-                  await home.setDeviceLevel(d, 24.0);
-                }
-              }
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('🕯️ Scene: Cozy 60% Warm Amber & 24°C')),
-                );
-              }
-            },
-          ),
-          const SizedBox(width: 8),
-          _scenePill(
-            label: '🎬 Movie',
-            tint: const Color(0xFFBF5AF2),
-            onTap: () async {
-              HapticFeedback.heavyImpact();
-              for (final d in home.devices) {
-                if (d.category == 'tv') {
-                  if (!d.isOn) await home.toggleDevicePower(d);
-                } else if (d.category == 'light') {
-                  if (d.name.toLowerCase().contains('backlight') ||
-                      d.name.toLowerCase().contains('wipro')) {
-                    if (!d.isOn) await home.toggleDevicePower(d);
-                    await home.setDeviceLevel(d, 40.0);
-                  } else if (d.isOn) {
-                    await home.toggleDevicePower(d);
-                  }
-                }
-              }
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('🎬 Scene: Movie Cinema Mode')),
-                );
-              }
-            },
-          ),
-          const SizedBox(width: 8),
-          _scenePill(
-            label: '🌙 Night',
-            tint: const Color(0xFF5E5CE6),
-            onTap: () async {
-              HapticFeedback.heavyImpact();
-              for (final d in home.devices) {
-                if (d.category == 'tv' && d.isOn) {
-                  await home.toggleDevicePower(d);
-                } else if (d.category == 'light') {
-                  if (d.name.toLowerCase().contains('bed') ||
-                      d.name.toLowerCase().contains('night')) {
-                    if (!d.isOn) await home.toggleDevicePower(d);
-                    await home.setDeviceLevel(d, 15.0);
-                  } else if (d.isOn) {
-                    await home.toggleDevicePower(d);
-                  }
-                } else if (d.category == 'ac') {
-                  if (!d.isOn) await home.toggleDevicePower(d);
-                  await home.setDeviceLevel(d, 25.0);
-                }
-              }
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('🌙 Scene: Night Light 15% & AC 25°C Sleep')),
-                );
-              }
-            },
-          ),
-          const SizedBox(width: 8),
-          _scenePill(
-            label: '🛡️ Away',
-            tint: const Color(0xFFFF453A),
-            onTap: () async {
-              HapticFeedback.heavyImpact();
-              for (final d in home.devices) {
-                if (d.category == 'light' && d.isOn) {
-                  await home.toggleDevicePower(d);
-                } else if (d.category == 'tv' && d.isOn) {
-                  await home.toggleDevicePower(d);
-                } else if (d.category == 'ac' && d.isOn) {
-                  await home.toggleDevicePower(d);
-                }
-              }
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('🛡️ Scene: Away Mode • Lights & ACs Off • Cameras Armed')),
-                );
-              }
-            },
-          ),
-          const SizedBox(width: 8),
-          _scenePill(
-            label: home.nodeServer.isRunning ? '🏛️ Hub 24/7' : '🏛️ Standby Hub',
-            tint: home.nodeServer.isRunning ? const Color(0xFF30D158) : const Color(0xFF00D4FF),
-            onTap: () {
-              HapticFeedback.mediumImpact();
-              NodeServerDashboardSheet.show(context);
-            },
-          ),
-        ],
+        children: scenes.map((s) {
+          final isSelected = _activeScene == s.id;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: GestureDetector(
+              onTap: () async {
+                HapticFeedback.mediumImpact();
+                setState(() => _activeScene = s.id);
+                await _applyScene(context, home, s.id);
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 240),
+                width: 72,
+                height: 66,
+                decoration: BoxDecoration(
+                  gradient: isSelected
+                      ? LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            s.color.withValues(alpha: 0.28),
+                            s.color.withValues(alpha: 0.12),
+                          ],
+                        )
+                      : null,
+                  color: isSelected ? null : Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: isSelected ? s.color : Colors.white.withValues(alpha: 0.10),
+                    width: isSelected ? 1.5 : 1.0,
+                  ),
+                  boxShadow: [
+                    if (isSelected)
+                      BoxShadow(
+                        color: s.color.withValues(alpha: 0.35),
+                        blurRadius: 14,
+                        offset: const Offset(0, 4),
+                      ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      s.icon,
+                      size: 20,
+                      color: isSelected ? s.color : Colors.white70,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      s.name,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                        color: isSelected ? Colors.white : Colors.white60,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildRoomCameraFilterBar(BuildContext context, RealHomeProvider home) {
-    final rooms = ['All', 'Living', 'Dining', 'Kitchen', 'Bedroom', 'Bathroom'];
+  Future<void> _applyScene(BuildContext context, RealHomeProvider home, String sceneId) async {
+    switch (sceneId) {
+      case 'Bright':
+        for (final d in home.devices) {
+          if (d.category == 'light') {
+            if (!d.isOn) await home.toggleDevicePower(d);
+            await home.setDeviceLevel(d, 100.0);
+          } else if (d.category == 'ac') {
+            if (!d.isOn) await home.toggleDevicePower(d);
+            await home.setDeviceLevel(d, 22.0);
+          }
+        }
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('☀️ Scene: Bright 100% Warm White & 22°C Cool')),
+          );
+        }
+        break;
+      case 'Cozy':
+        for (final d in home.devices) {
+          if (d.category == 'light') {
+            if (!d.isOn) await home.toggleDevicePower(d);
+            await home.setDeviceLevel(d, 60.0);
+          } else if (d.category == 'ac') {
+            if (!d.isOn) await home.toggleDevicePower(d);
+            await home.setDeviceLevel(d, 24.0);
+          }
+        }
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('🕯️ Scene: Cozy 60% Warm Amber & 24°C')),
+          );
+        }
+        break;
+      case 'Movie':
+        for (final d in home.devices) {
+          if (d.category == 'tv') {
+            if (!d.isOn) await home.toggleDevicePower(d);
+          } else if (d.category == 'light') {
+            if (d.name.toLowerCase().contains('backlight') ||
+                d.name.toLowerCase().contains('ambilight') ||
+                d.name.toLowerCase().contains('wipro')) {
+              if (!d.isOn) await home.toggleDevicePower(d);
+              await home.setDeviceLevel(d, 40.0);
+            } else if (d.isOn) {
+              await home.toggleDevicePower(d);
+            }
+          }
+        }
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('🎬 Scene: Movie Cinema Mode')),
+          );
+        }
+        break;
+      case 'Night':
+        for (final d in home.devices) {
+          if (d.category == 'tv' && d.isOn) {
+            await home.toggleDevicePower(d);
+          } else if (d.category == 'light') {
+            if (d.name.toLowerCase().contains('bed') ||
+                d.name.toLowerCase().contains('night')) {
+              if (!d.isOn) await home.toggleDevicePower(d);
+              await home.setDeviceLevel(d, 15.0);
+            } else if (d.isOn) {
+              await home.toggleDevicePower(d);
+            }
+          } else if (d.category == 'ac') {
+            if (!d.isOn) await home.toggleDevicePower(d);
+            await home.setDeviceLevel(d, 25.0);
+          }
+        }
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('🌙 Scene: Night Light 15% & AC 25°C Sleep')),
+          );
+        }
+        break;
+      case 'Away':
+        for (final d in home.devices) {
+          if (d.category == 'light' && d.isOn) {
+            await home.toggleDevicePower(d);
+          } else if (d.category == 'tv' && d.isOn) {
+            await home.toggleDevicePower(d);
+          } else if (d.category == 'ac' && d.isOn) {
+            await home.toggleDevicePower(d);
+          }
+        }
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('🛡️ Scene: Away Mode • Devices Off • Security Armed')),
+          );
+        }
+        break;
+    }
+  }
+
+  Widget _buildHouseControlRooms(BuildContext context, RealHomeProvider home) {
+    final rooms = ['All', 'Living', 'Bedroom', 'Kitchen', 'Laundry', 'Bathroom', 'Garage'];
+
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: Row(
-        children: [
-          ...rooms.map((room) {
-            final isSelected = _selectedRoom.toLowerCase() == room.toLowerCase();
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                label: Text(room),
-                selected: isSelected,
-                selectedColor: const Color(0xFF0A84FF),
-                backgroundColor: Colors.white.withValues(alpha: 0.08),
-                labelStyle: TextStyle(
-                  color: isSelected ? Colors.white : Colors.white70,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                  fontSize: 12,
+        children: rooms.map((room) {
+          final isSelected = _selectedRoom.toLowerCase() == room.toLowerCase();
+          final count = home.devices.where((d) {
+            if (!d.isOn) return false;
+            if (room == 'All') return true;
+            return d.room.toLowerCase().contains(room.toLowerCase());
+          }).length;
+
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: GestureDetector(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                setState(() => _selectedRoom = room);
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? const Color(0xFF2F7BF2)
+                      : Colors.white.withValues(alpha: 0.07),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isSelected
+                        ? const Color(0xFF5AA2FF)
+                        : Colors.white.withValues(alpha: 0.10),
+                    width: 1.0,
+                  ),
+                  boxShadow: [
+                    if (isSelected)
+                      BoxShadow(
+                        color: const Color(0xFF2F7BF2).withValues(alpha: 0.40),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                  ],
                 ),
-                onSelected: (val) {
-                  if (val) {
-                    HapticFeedback.selectionClick();
-                    setState(() => _selectedRoom = room);
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      room,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                        color: isSelected ? Colors.white : Colors.white70,
+                      ),
+                    ),
+                    if (count > 0) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? Colors.white.withValues(alpha: 0.28)
+                              : const Color(0xFFFF9F0A).withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '$count',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.bold,
+                            color: isSelected ? Colors.white : const Color(0xFFFFD60A),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildHouseControlListHead(BuildContext context, RealHomeProvider home, int count) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 10, 18, 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            _selectedRoom == 'All' ? 'All Devices ($count)' : '$_selectedRoom Devices ($count)',
+            style: const TextStyle(
+              fontSize: 15.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.3,
+              color: Colors.white,
+            ),
+          ),
+          Row(
+            children: [
+              GestureDetector(
+                onTap: () async {
+                  HapticFeedback.lightImpact();
+                  final target = _selectedRoom == 'All'
+                      ? home.devices
+                      : home.devices.where((d) => d.room.toLowerCase().contains(_selectedRoom.toLowerCase()));
+                  for (final d in target.where((d) => !d.isOn)) {
+                    await home.toggleDevicePower(d);
                   }
                 },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                  ),
+                  child: const Text(
+                    'All on',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF30D158),
+                    ),
+                  ),
+                ),
               ),
-            );
-          }),
-          const SizedBox(width: 4),
-          ActionChip(
-            avatar: const Icon(Icons.power_settings_new_rounded, size: 13, color: Color(0xFF30D158)),
-            label: const Text('All on',
-                style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-            backgroundColor: Colors.white.withValues(alpha: 0.08),
-            onPressed: () async {
-              HapticFeedback.lightImpact();
-              final targetDevices = _selectedRoom == 'All'
-                  ? home.devices
-                  : home.devices.where((d) => d.room.toLowerCase().contains(_selectedRoom.toLowerCase()));
-              for (final d in targetDevices.where((d) => !d.isOn)) {
-                await home.toggleDevicePower(d);
-              }
-            },
-          ),
-          const SizedBox(width: 6),
-          ActionChip(
-            avatar: const Icon(Icons.power_off_rounded, size: 13, color: Color(0xFFFF453A)),
-            label: const Text('All off',
-                style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-            backgroundColor: Colors.white.withValues(alpha: 0.08),
-            onPressed: () async {
-              HapticFeedback.lightImpact();
-              final targetDevices = _selectedRoom == 'All'
-                  ? home.devices
-                  : home.devices.where((d) => d.room.toLowerCase().contains(_selectedRoom.toLowerCase()));
-              for (final d in targetDevices.where((d) => d.isOn)) {
-                await home.toggleDevicePower(d);
-              }
-            },
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () async {
+                  HapticFeedback.lightImpact();
+                  final target = _selectedRoom == 'All'
+                      ? home.devices
+                      : home.devices.where((d) => d.room.toLowerCase().contains(_selectedRoom.toLowerCase()));
+                  for (final d in target.where((d) => d.isOn)) {
+                    await home.toggleDevicePower(d);
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                  ),
+                  child: const Text(
+                    'All off',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFFF453A),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _scenePill({
-    required String label,
-    required Color tint,
-    required VoidCallback onTap,
-  }) {
-    return GlassContainer(
-      borderRadius: 18,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      isActive: true,
-      activeTint: tint,
-      onTap: onTap,
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 12.5,
-          fontWeight: FontWeight.bold,
-          color: Colors.white,
-        ),
       ),
     );
   }
@@ -759,6 +1092,113 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
     final updated = await FloorPlanEditorSheet.show(context, layout: _layout);
     if (updated != null && mounted) {
       setState(() => _layout = updated);
+    }
+  }
+
+  int _activeDeviceCountForRoom(String roomId, RealHomeProvider home) {
+    int count = 0;
+    for (final fix in _layout.fixtures) {
+      if (roomId != 'all' && fix.roomId.toLowerCase() != roomId.toLowerCase()) continue;
+      if (fix.linkedRealDeviceId != null) {
+        final dev = home.devices.where((d) => d.id == fix.linkedRealDeviceId).firstOrNull;
+        if (dev?.isOn == true) count++;
+      }
+    }
+    return count;
+  }
+
+  IconData _iconForScene(String iconName) {
+    switch (iconName.toLowerCase()) {
+      case 'sun':
+        return Icons.wb_sunny_rounded;
+      case 'moon':
+        return Icons.nightlight_round;
+      case 'sofa':
+        return Icons.weekend_rounded;
+      case 'table':
+        return Icons.table_restaurant_rounded;
+      case 'film':
+        return Icons.movie_rounded;
+      case 'door':
+        return Icons.door_front_door_rounded;
+      default:
+        return Icons.auto_awesome_rounded;
+    }
+  }
+
+  Future<void> _applyHouseControlScene(HouseScene3D scene, RealHomeProvider home) async {
+    HapticFeedback.mediumImpact();
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(_iconForScene(scene.icon), color: const Color(0xFFFF9F0A), size: 18),
+            const SizedBox(width: 10),
+            Text('Scene: "${scene.name}" applied', style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        backgroundColor: const Color(0xFF1E232E),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+
+    // Apply scene to linked lights
+    final starConfig = scene.lights['*'] as Map<String, dynamic>?;
+    final bool? starOn = starConfig?['on'] as bool?;
+    final double? starBrightness = (starConfig?['brightness'] as num?)?.toDouble();
+
+    for (final fix in _layout.fixtures) {
+      if (fix.fixtureType == 'wall_ac') continue;
+      final specific = scene.lights[fix.id] as Map<String, dynamic>?;
+      final targetOn = specific?['on'] as bool? ?? starOn;
+      final targetBrightness = (specific?['brightness'] as num?)?.toDouble() ?? starBrightness;
+
+      if (fix.linkedRealDeviceId != null) {
+        final dev = home.devices.where((d) => d.id == fix.linkedRealDeviceId).firstOrNull;
+        if (dev != null) {
+          if (targetOn != null && dev.isOn != targetOn) {
+            await home.toggleDevicePower(dev);
+          }
+          if (targetBrightness != null && (targetOn ?? true)) {
+            await home.setDeviceLevel(dev, (targetBrightness * 100).clamp(1.0, 100.0));
+          }
+        }
+      }
+    }
+
+    // Apply scene to linked ACs
+    final starAc = scene.acs['*'] as Map<String, dynamic>?;
+    final bool? starAcOn = starAc?['on'] as bool?;
+
+    for (final fix in _layout.fixtures) {
+      if (fix.fixtureType != 'wall_ac') continue;
+      final specificAc = scene.acs[fix.id] as Map<String, dynamic>?;
+      final targetAcOn = specificAc?['on'] as bool? ?? starAcOn;
+
+      if (fix.linkedRealDeviceId != null) {
+        final dev = home.devices.where((d) => d.id == fix.linkedRealDeviceId).firstOrNull;
+        if (dev != null && targetAcOn != null && dev.isOn != targetAcOn) {
+          await home.toggleDevicePower(dev);
+        }
+      }
+    }
+  }
+
+  Future<void> _bulkToggleAll(bool turnOn, RealHomeProvider home) async {
+    HapticFeedback.heavyImpact();
+    for (final dev in home.devices) {
+      if (dev.isOn != turnOn) {
+        await home.toggleDevicePower(dev);
+      }
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(turnOn ? 'All Devices Turned On' : 'All Devices Turned Off'),
+          backgroundColor: turnOn ? const Color(0xFF30D158) : const Color(0xFFFF453A),
+        ),
+      );
     }
   }
 
@@ -803,33 +1243,86 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
           ),
         ),
 
-        // 2. Top Action Bar: 2D Studio & Camera Presets
+        // 2. Top Header HUD Bar (House Control Style with Bulk Toggles & Camera Presets)
         Positioned(
           top: 12,
           left: 16,
           right: 16,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _actionChip(
-                  icon: Icons.architecture_rounded,
-                  label: '2D Blueprint Studio',
-                  color: const Color(0xFF00D4FF),
-                  onTap: _openBlueprintStudio,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _actionChip(
+                      icon: Icons.architecture_rounded,
+                      label: '2D Blueprint Studio',
+                      color: const Color(0xFF00D4FF),
+                      onTap: _openBlueprintStudio,
+                    ),
+                    const SizedBox(width: 8),
+                    _actionChip(
+                      icon: Icons.power_rounded,
+                      label: 'All On',
+                      color: const Color(0xFF30D158),
+                      onTap: () => _bulkToggleAll(true, home),
+                    ),
+                    const SizedBox(width: 8),
+                    _actionChip(
+                      icon: Icons.power_off_rounded,
+                      label: 'All Off',
+                      color: const Color(0xFFFF453A),
+                      onTap: () => _bulkToggleAll(false, home),
+                    ),
+                    const SizedBox(width: 8),
+                    _cameraPresetChip('Isometric 3D', yaw: -0.59, pitch: 0.82),
+                    const SizedBox(width: 8),
+                    _cameraPresetChip('Top Blueprint', yaw: 0.0, pitch: 0.15),
+                    const SizedBox(width: 8),
+                    _cameraPresetChip('Elevation Front', yaw: 0.0, pitch: 1.25),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                _cameraPresetChip('Isometric 3D', yaw: -0.46, pitch: 0.82),
-                const SizedBox(width: 8),
-                _cameraPresetChip('Top Blueprint', yaw: 0.0, pitch: 0.15),
-                const SizedBox(width: 8),
-                _cameraPresetChip('Elevation Front', yaw: 0.0, pitch: 1.25),
-              ],
-            ),
+              ),
+              const SizedBox(height: 8),
+
+              // House Control Authentic Scenes Bar
+              if (_layout.scenes.isNotEmpty)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: _layout.scenes.map((scene) {
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8.0),
+                        child: GlassContainer(
+                          borderRadius: 16,
+                          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+                          onTap: () => _applyHouseControlScene(scene, home),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(_iconForScene(scene.icon), size: 14, color: const Color(0xFFFF9F0A)),
+                              const SizedBox(width: 5),
+                              Text(
+                                scene.name,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+            ],
           ),
         ),
 
-        // 3. Bottom Room Filter Bar
+        // 3. Bottom Room Filter Bar (Dynamic rooms from layout with active count badges)
         Positioned(
           bottom: 16,
           left: 16,
@@ -838,15 +1331,18 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                for (final r in [
-                  {'id': 'all', 'label': 'All'},
-                  {'id': 'living', 'label': 'Living'},
-                  {'id': 'dining', 'label': 'Dining'},
-                  {'id': 'kitchen', 'label': 'Kitchen'},
-                  {'id': 'bedroom', 'label': 'Bedroom'},
-                  {'id': 'bathroom', 'label': 'Bathroom'},
-                ]) ...[
-                  _roomFilterChip(r['id']!, r['label']!),
+                _roomFilterChip(
+                  'all',
+                  'All Rooms',
+                  activeCount: _activeDeviceCountForRoom('all', home),
+                ),
+                const SizedBox(width: 8),
+                for (final r in _layout.rooms) ...[
+                  _roomFilterChip(
+                    r.id,
+                    r.name,
+                    activeCount: _activeDeviceCountForRoom(r.id, home),
+                  ),
                   const SizedBox(width: 8),
                 ],
               ],
@@ -904,24 +1400,47 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
     );
   }
 
-  Widget _roomFilterChip(String id, String label) {
+  Widget _roomFilterChip(String id, String label, {int activeCount = 0}) {
     final isSelected = _selectedRoomId == id;
     return GlassContainer(
       borderRadius: 18,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
       isActive: isSelected,
       activeTint: const Color(0xFF00D4FF),
       onTap: () {
         HapticFeedback.selectionClick();
         setState(() => _selectedRoomId = id);
       },
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: isSelected ? Colors.white : Colors.white70,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+              color: isSelected ? Colors.black : Colors.white70,
+            ),
+          ),
+          if (activeCount > 0) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.black26 : const Color(0xFF00D4FF).withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$activeCount',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: isSelected ? Colors.black : const Color(0xFF00D4FF),
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -1669,10 +2188,80 @@ class _RealDevicePairingModalState extends State<_RealDevicePairingModal> {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 12),
+
+              // Scan QR Code Hero Banner (Works with all providers)
+              GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  UniversalQrScannerSheet.show(context);
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF00D4FF), Color(0xFF30D158)],
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF00D4FF).withValues(alpha: 0.35),
+                        blurRadius: 16,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.qr_code_scanner_rounded, color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Scan Appliance QR Code',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14.5,
+                                color: Colors.white,
+                              ),
+                            ),
+                            Text(
+                              'Instant pairing for Samsung, LG, Wipro, Hue, WiZ, Realme & Matter',
+                              style: TextStyle(fontSize: 11, color: Colors.white),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 14),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 14),
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
+                    ChoiceChip(
+                      avatar: const Icon(Icons.qr_code_scanner_rounded, size: 16, color: Color(0xFF00D4FF)),
+                      label: const Text('Scan QR Code'),
+                      selected: false,
+                      onSelected: (_) {
+                        Navigator.pop(context);
+                        UniversalQrScannerSheet.show(context);
+                      },
+                    ),
+                    const SizedBox(width: 8),
                     ChoiceChip(
                       label: const Text('Sign In with Brand (Google Home Style)'),
                       selected: _mode == 0,
@@ -1951,8 +2540,18 @@ class _RealDevicePairingModalState extends State<_RealDevicePairingModal> {
   }
 }
 
-void _showDeviceControlSheet(BuildContext context, RealSmartDevice device) {
-  if (device.category == 'camera') {
+void _showDeviceControlSheet(BuildContext context, RealSmartDevice device) =>
+    showDeviceControlSheet(context, device);
+
+void showDeviceControlSheet(BuildContext context, RealSmartDevice device) {
+  final devId = device.id.toLowerCase();
+  final devName = device.name.toLowerCase();
+  final cat = device.category.toLowerCase();
+  final archetype = UniversalCategoryClassifier.classify(device);
+  final isLg = devId.contains('lg') || devName.contains('lg');
+
+  // 1. Camera Cockpit
+  if (archetype == UniversalDeviceArchetype.cameraSecurity || cat == 'camera') {
     final home = context.read<RealHomeProvider>();
     showModalBottomSheet(
       context: context,
@@ -1970,6 +2569,158 @@ void _showDeviceControlSheet(BuildContext context, RealSmartDevice device) {
     return;
   }
 
+  // 2. Laundry Suite (Samsung AI Ecobubble™ Washer vs LG WashTower)
+  if (archetype == UniversalDeviceArchetype.laundry ||
+      cat == 'washer' ||
+      devId.contains('washer') ||
+      devName.contains('washer') ||
+      devId.contains('washtower')) {
+    if (isLg || devId.contains('washtower')) {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withValues(alpha: 0.65),
+        builder: (ctx) => LgFutureAppliancesSheet(
+          initialDevice: device,
+          initialTabIndex: 0,
+        ),
+      );
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.65),
+      builder: (ctx) => SamsungWasherSheet(device: device),
+    );
+    return;
+  }
+
+  // 3. Air Conditioners / Climate Suite (Samsung WindFree™ vs LG DualCool™ / Inverter)
+  if (archetype == UniversalDeviceArchetype.climateAc ||
+      cat == 'ac' ||
+      cat == 'climate' ||
+      devId.contains('ac') ||
+      devName.contains('ac') ||
+      devName.contains('air conditioner')) {
+    if (devId.contains('samsung') ||
+        devName.contains('samsung') ||
+        device.windFreeEnabled ||
+        devId.contains('windfree')) {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withValues(alpha: 0.65),
+        builder: (ctx) => SamsungFutureDevicesSheet(
+          initialDevice: device,
+          initialTabIndex: 0,
+        ),
+      );
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.65),
+      builder: (ctx) => LgThinqAcSheet(device: device),
+    );
+    return;
+  }
+
+  // 4. Refrigerators (Samsung Family Hub™ vs LG InstaView™)
+  if (archetype == UniversalDeviceArchetype.refrigeration ||
+      cat == 'fridge' ||
+      cat == 'refrigerator' ||
+      devId.contains('fridge') ||
+      devName.contains('fridge') ||
+      devId.contains('instaview')) {
+    if (isLg || devId.contains('instaview')) {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withValues(alpha: 0.65),
+        builder: (ctx) => LgFutureAppliancesSheet(
+          initialDevice: device,
+          initialTabIndex: 1,
+        ),
+      );
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.65),
+      builder: (ctx) => SamsungFutureDevicesSheet(
+        initialDevice: device,
+        initialTabIndex: 1,
+      ),
+    );
+    return;
+  }
+
+  // 5. Air Purifiers / AeroTower (LG PuriCare™ AeroTower)
+  if (archetype == UniversalDeviceArchetype.fanAir ||
+      cat.contains('purifier') ||
+      devId.contains('aerotower') ||
+      devName.contains('aerotower') ||
+      devId.contains('puricare') ||
+      devName.contains('puricare')) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.65),
+      builder: (ctx) => LgFutureAppliancesSheet(
+        initialDevice: device,
+        initialTabIndex: 2,
+      ),
+    );
+    return;
+  }
+
+  // 6. LG Styler® Steam Closet & QuadWash™ Dishwasher
+  if (devId.contains('styler') ||
+      devName.contains('styler') ||
+      devId.contains('dish') ||
+      devName.contains('dish')) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.65),
+      builder: (ctx) => LgFutureAppliancesSheet(
+        initialDevice: device,
+        initialTabIndex: 3,
+      ),
+    );
+    return;
+  }
+
+  // 7. Televisions & The Frame Art Mode
+  if (archetype == UniversalDeviceArchetype.tvMedia ||
+      cat == 'tv' ||
+      devId.contains('the_frame') ||
+      devName.contains('frame')) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.65),
+      builder: (ctx) => SamsungFutureDevicesSheet(
+        initialDevice: device,
+        initialTabIndex: 2,
+      ),
+    );
+    return;
+  }
+
+  // 8. Fallback: Classic Apple Glass Sheet for generic switches, lights, plugs
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -1979,16 +2730,18 @@ void _showDeviceControlSheet(BuildContext context, RealSmartDevice device) {
   );
 }
 
-class _AppleGlassDeviceControlSheet extends StatefulWidget {
+class AppleGlassDeviceControlSheet extends StatefulWidget {
   final RealSmartDevice initialDevice;
 
-  const _AppleGlassDeviceControlSheet({required this.initialDevice});
+  const AppleGlassDeviceControlSheet({super.key, required this.initialDevice});
 
   @override
-  State<_AppleGlassDeviceControlSheet> createState() => _AppleGlassDeviceControlSheetState();
+  State<AppleGlassDeviceControlSheet> createState() => _AppleGlassDeviceControlSheetState();
 }
 
-class _AppleGlassDeviceControlSheetState extends State<_AppleGlassDeviceControlSheet> {
+typedef _AppleGlassDeviceControlSheet = AppleGlassDeviceControlSheet;
+
+class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSheet> {
   bool _isRefreshing = false;
   String? _selectedWaterTemp;
   String? _selectedSpinSpeed;
@@ -2027,11 +2780,7 @@ class _AppleGlassDeviceControlSheetState extends State<_AppleGlassDeviceControlS
       decoration: const BoxDecoration(
         color: Color(0xFF090E1D),
         borderRadius: BorderRadius.vertical(top: Radius.circular(34)),
-        border: Border(
-          top: BorderSide(color: Colors.white24, width: 1.2),
-          left: BorderSide(color: Colors.white12, width: 1.0),
-          right: BorderSide(color: Colors.white12, width: 1.0),
-        ),
+        border: Border.fromBorderSide(BorderSide(color: Colors.white24, width: 1.0)),
         boxShadow: [
           BoxShadow(color: Colors.black87, blurRadius: 40, spreadRadius: 10),
         ],
@@ -2164,20 +2913,30 @@ class _AppleGlassDeviceControlSheetState extends State<_AppleGlassDeviceControlS
                       ),
                       icon: Icon(isOn ? Icons.power_settings_new_rounded : Icons.play_arrow_rounded, size: 18),
                       label: Text(isOn ? 'Turn Off' : 'Turn On', style: const TextStyle(fontWeight: FontWeight.bold)),
-                      onPressed: !isOnline
-                          ? null
-                          : () async {
-                              HapticFeedback.mediumImpact();
-                              try {
-                                await home.toggleDevicePower(device);
-                              } catch (e) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Error: $e')),
-                                  );
-                                }
-                              }
-                            },
+                      onPressed: () async {
+                        HapticFeedback.mediumImpact();
+                        final wasOffline = !device.isOnline;
+                        try {
+                          await home.toggleDevicePower(device);
+                          if (context.mounted && wasOffline && device.isOnline) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Reconnected to ${device.name}! Device is back online.'),
+                                backgroundColor: const Color(0xFF30D158),
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Error: ${e.toString().replaceAll('Exception: ', '')}'),
+                                backgroundColor: const Color(0xFFFF453A),
+                              ),
+                            );
+                          }
+                        }
+                      },
                     ),
                   ],
                 ),
@@ -2440,24 +3199,45 @@ class _AppleGlassDeviceControlSheetState extends State<_AppleGlassDeviceControlS
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Circular Temperature Readout
+        // Circular Temperature Readout with House Control temp-gradient lerp
         Center(
           child: Container(
             width: 170,
             height: 170,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: Colors.white.withValues(alpha: 0.05),
-              border: Border.all(color: const Color(0xFF00D4FF).withValues(alpha: 0.35), width: 2),
+              color: Color.lerp(
+                const Color(0xFF1C4FC0).withValues(alpha: 0.15),
+                const Color(0xFF8A3D12).withValues(alpha: 0.20),
+                (currentTemp - 16.0) / 14.0,
+              ),
+              border: Border.all(
+                color: Color.lerp(
+                  const Color(0xFF2F7DF6),
+                  const Color(0xFFF0762C),
+                  (currentTemp - 16.0) / 14.0,
+                )!.withValues(alpha: 0.45),
+                width: 2.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Color.lerp(
+                    const Color(0xFF2F7DF6),
+                    const Color(0xFFF0762C),
+                    (currentTemp - 16.0) / 14.0,
+                  )!.withValues(alpha: 0.25),
+                  blurRadius: 20,
+                ),
+              ],
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Text('SET TEMPERATURE', style: TextStyle(fontSize: 10, letterSpacing: 1.5, color: Colors.white54)),
+                const Text('TARGET CLIMATE', style: TextStyle(fontSize: 10, letterSpacing: 1.5, color: Colors.white54, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
                 Text(
                   '${currentTemp.round()}°C',
-                  style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800, color: Colors.white),
+                  style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w900, color: Colors.white),
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -2490,26 +3270,30 @@ class _AppleGlassDeviceControlSheetState extends State<_AppleGlassDeviceControlS
         ),
         const SizedBox(height: 18),
 
-        // Mode Chips
+        // House Control AC Modes with Authentic Mode Colors
         const Text('Climate Mode', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
-          children: ['Cool', 'Jet Cool', 'Eco', 'Fan'].map((mode) {
-            final selected = _acMode == mode;
+          children: ['cool', 'heat', 'dry', 'fan', 'auto'].map((modeKey) {
+            final label = modeKey[0].toUpperCase() + modeKey.substring(1);
+            final modeColor = IsometricHouse3DWidget.kHouseControlModeColors[modeKey] ?? const Color(0xFF00D4FF);
+            final selected = _acMode.toLowerCase() == modeKey;
+
             return ChoiceChip(
-              label: Text(mode),
+              avatar: CircleAvatar(backgroundColor: modeColor, radius: 4),
+              label: Text(label),
               selected: selected,
-              selectedColor: const Color(0xFF0A84FF),
+              selectedColor: modeColor.withValues(alpha: 0.85),
               backgroundColor: Colors.white12,
               labelStyle: TextStyle(
-                color: selected ? Colors.white : Colors.white70,
+                color: selected ? Colors.black : Colors.white70,
                 fontWeight: selected ? FontWeight.bold : FontWeight.normal,
               ),
               onSelected: !isOnline
                   ? null
                   : (sel) {
-                      if (sel) setState(() => _acMode = mode);
+                      if (sel) setState(() => _acMode = label);
                     },
             );
           }).toList(),
@@ -2573,61 +3357,86 @@ class _AppleGlassDeviceControlSheetState extends State<_AppleGlassDeviceControlS
         ),
         const SizedBox(height: 14),
 
-        // Kelvin Presets
-        const Text('Color Temperature', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+        // Kelvin Color Temperature Presets matching House Control lights.js
+        const Text('Color Temperature (Kelvin)', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
-          children: ['2700K', '3000K', '4000K', '6500K'].map((k) {
-            final selected = _lightKelvin == k;
+          children: [
+            {'k': '2200K', 'val': 2200.0, 'label': '2200K Candle'},
+            {'k': '3000K', 'val': 3000.0, 'label': '3000K Warm'},
+            {'k': '4200K', 'val': 4200.0, 'label': '4200K Neutral'},
+            {'k': '6500K', 'val': 6500.0, 'label': '6500K Daylight'},
+          ].map((item) {
+            final kStr = item['k'] as String;
+            final kVal = item['val'] as double;
+            final label = item['label'] as String;
+            final selected = _lightKelvin == kStr;
+            final previewColor = IsometricHouse3DWidget.tempToColor(kVal);
+
             return ChoiceChip(
-              label: Text(k),
+              avatar: CircleAvatar(backgroundColor: previewColor, radius: 5),
+              label: Text(label),
               selected: selected,
-              selectedColor: const Color(0xFFFF9F0A),
+              selectedColor: previewColor.withValues(alpha: 0.9),
               backgroundColor: Colors.white12,
               labelStyle: TextStyle(
                 color: selected ? Colors.black : Colors.white70,
                 fontWeight: selected ? FontWeight.bold : FontWeight.normal,
               ),
-              onSelected: !isOnline ? null : (sel) => setState(() => _lightKelvin = k),
+              onSelected: !isOnline ? null : (sel) => setState(() => _lightKelvin = kStr),
             );
           }).toList(),
         ),
         const SizedBox(height: 14),
 
-        // Color Chips
+        // Continuous Kelvin Gradient Bar
+        Container(
+          height: 6,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(3),
+            gradient: const LinearGradient(
+              colors: [
+                Color(0xFFFF9438),
+                Color(0xFFFFBD7A),
+                Color(0xFFFFE2C2),
+                Color(0xFFDFE9FF),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Authentic House Control Swatches (8 Vibrant Palette Colors)
         const Text('Color Preset', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            const Color(0xFFFF9F0A),
-            const Color(0xFF00D4FF),
-            const Color(0xFFBF5AF2),
-            const Color(0xFFFF375F),
-            const Color(0xFF30D158),
-            const Color(0xFFFFFFFF),
-          ].map((c) {
-            final isSel = _lightColor == c;
-            return GestureDetector(
-              onTap: !isOnline ? null : () => setState(() => _lightColor = c),
-              child: Container(
-                margin: const EdgeInsets.only(right: 12),
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: c,
-                  border: Border.all(
-                    color: isSel ? Colors.white : Colors.transparent,
-                    width: isSel ? 2.5 : 0,
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: IsometricHouse3DWidget.kHouseControlSwatches.map((c) {
+              final isSel = _lightColor == c;
+              return GestureDetector(
+                onTap: !isOnline ? null : () => setState(() => _lightColor = c),
+                child: Container(
+                  margin: const EdgeInsets.only(right: 12),
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: c,
+                    border: Border.all(
+                      color: isSel ? Colors.white : Colors.transparent,
+                      width: isSel ? 2.5 : 0,
+                    ),
+                    boxShadow: [
+                      if (isSel) BoxShadow(color: c.withValues(alpha: 0.6), blurRadius: 10),
+                    ],
                   ),
-                  boxShadow: [
-                    if (isSel) BoxShadow(color: c.withValues(alpha: 0.6), blurRadius: 10),
-                  ],
                 ),
-              ),
-            );
-          }).toList(),
+              );
+            }).toList(),
+          ),
         ),
       ],
     );

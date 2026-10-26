@@ -81,6 +81,7 @@ class RealHomeProvider extends ChangeNotifier {
   Timer? _pollingTimer;
   bool _isPollingInFlight = false;
   final Map<String, Timer> _levelDebounceTimers = {};
+  final Map<String, Timer> _applianceDebounceTimers = {};
   bool isBusy = false;
   String? lastGlobalError;
 
@@ -166,6 +167,10 @@ class RealHomeProvider extends ChangeNotifier {
       timer.cancel();
     }
     _levelDebounceTimers.clear();
+    for (final timer in _applianceDebounceTimers.values) {
+      timer.cancel();
+    }
+    _applianceDebounceTimers.clear();
     reflexBus.dispose();
     nodeServer.stopServer();
     nodeServer.dispose();
@@ -183,8 +188,12 @@ class RealHomeProvider extends ChangeNotifier {
     final transition = await osBridge.checkPresenceTransition();
     if (transition != null) {
       if (!transition) {
-        // Left Home -> Auto turn off running devices
-        for (final d in _devices.where((d) => d.isOn)) {
+        // Left Home -> Auto turn off running devices, but never power off
+        // always-on or safety-critical appliances such as refrigerators,
+        // security cameras, or active laundry machines.
+        const exemptCategories = {'fridge', 'camera', 'washer'};
+        for (final d
+            in _devices.where((d) => d.isOn && !exemptCategories.contains(d.category))) {
           try {
             await toggleDevicePower(d);
           } catch (_) {}
@@ -385,10 +394,70 @@ class RealHomeProvider extends ChangeNotifier {
     }
   }
 
+  RealSmartDevice sanitizeDeviceCredentials(RealSmartDevice dev) {
+    final Map<String, dynamic> creds = Map<String, dynamic>.from(dev.credentials);
+    final hubUrl = creds['hubUrl']?.toString().trim();
+    final localKey = creds['localKey']?.toString().trim();
+    final token = creds['token']?.toString().trim();
+    final controlUrl = creds['controlUrl']?.toString().trim();
+    final onUrl = creds['onUrl']?.toString().trim();
+    final offUrl = creds['offUrl']?.toString().trim();
+
+    final hasRealHardware = dev.hasRealHardwareCredentials ||
+        (hubUrl != null && hubUrl.isNotEmpty && !hubUrl.toLowerCase().contains('demo')) ||
+        (localKey != null && localKey.length == 16) ||
+        (token != null && token.length > 10 && !token.toLowerCase().contains('demo')) ||
+        (controlUrl != null && controlUrl.isNotEmpty && !controlUrl.toLowerCase().contains('demo')) ||
+        (onUrl != null && onUrl.isNotEmpty && !onUrl.toLowerCase().contains('demo')) ||
+        (offUrl != null && offUrl.isNotEmpty && !offUrl.toLowerCase().contains('demo'));
+
+    if (!hasRealHardware) {
+      return dev;
+    }
+
+    bool modified = false;
+    if (creds['vendor']?.toString().toLowerCase() == 'demo') {
+      creds.remove('vendor');
+      modified = true;
+    }
+    if (creds['token']?.toString().toLowerCase().contains('demo') == true) {
+      creds.remove('token');
+      modified = true;
+    }
+    if (creds['isDemo'] == true || creds['isDemo']?.toString().toLowerCase() == 'true') {
+      creds.remove('isDemo');
+      modified = true;
+    }
+
+    if (!modified) {
+      return dev;
+    }
+
+    try {
+      if (dev.credentials.containsKey('vendor') && dev.credentials['vendor']?.toLowerCase() == 'demo') {
+        dev.credentials.remove('vendor');
+      }
+      if (dev.credentials['token']?.toLowerCase().contains('demo') == true) {
+        dev.credentials.remove('token');
+      }
+      dev.credentials.remove('isDemo');
+      return dev;
+    } catch (_) {
+      final Map<String, String> safeCreds = {};
+      for (final entry in creds.entries) {
+        if (entry.value != null) {
+          safeCreds[entry.key] = entry.value.toString();
+        }
+      }
+      return dev.copyWith(credentials: safeCreds);
+    }
+  }
+
   Future<void> updateDevice(RealSmartDevice dev) async {
-    final idx = _devices.indexWhere((d) => d.id == dev.id);
+    final sanitized = sanitizeDeviceCredentials(dev);
+    final idx = _devices.indexWhere((d) => d.id == sanitized.id);
     if (idx != -1) {
-      _devices[idx] = dev;
+      _devices[idx] = sanitized;
       await _saveState();
       notifyListeners();
     }
@@ -396,91 +465,802 @@ class RealHomeProvider extends ChangeNotifier {
 
   Future<void> addDevice(RealSmartDevice dev) async => addDirectLanDevice(dev);
 
-  void updateWasher(String id, {String? cycle, int? waterTemp, String? spinSpeed, bool? steam}) {
-    final idx = _devices.indexWhere((d) => d.id == id);
-    if (idx != -1) {
-      final dev = _devices[idx];
-      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
-      if (cycle != null) attrs['cycle'] = cycle;
-      if (waterTemp != null) attrs['waterTemperature'] = waterTemp;
-      if (spinSpeed != null) attrs['spinSpeed'] = spinSpeed;
-      if (steam != null) attrs['steam'] = steam;
-      dev.liveAttributes = attrs;
-      _saveState();
-      notifyListeners();
+  bool _isHardwareExecutable(RealSmartDevice dev) {
+    if (dev.hasRealHardwareCredentials) return true;
+    if (dev.isDummy) return false;
+    if (dev.id.contains('demo') || dev.id.contains('sample') || dev.id.contains('test')) return false;
+
+    switch (dev.protocol) {
+      case ConnectionProtocol.smartThingsCloud:
+        final token = dev.credentials['token'] ?? linkedSmartThingsPat;
+        return token != null && token.isNotEmpty && !token.contains('demo') && token.length > 10;
+
+      case ConnectionProtocol.lgThinqCloud:
+        final token = dev.credentials['token'] ?? linkedLgThinqPat;
+        return token != null && token.isNotEmpty && !token.contains('demo') && token.length > 10;
+
+      case ConnectionProtocol.customHttpWebhook:
+        if (dev.isLgThinq || dev.credentials['vendor'] == 'lg_thinq' || dev.credentials['vendor'] == 'lg') {
+          final token = dev.credentials['token'] ?? linkedLgThinqPat;
+          return token != null && token.isNotEmpty && !token.contains('demo') && token.length > 10;
+        }
+        return dev.credentials['controlUrl']?.isNotEmpty == true || dev.credentials['onUrl']?.isNotEmpty == true;
+
+      case ConnectionProtocol.tuyaLocalLan:
+        final key = dev.credentials['localKey'];
+        final ip = dev.credentials['ip'];
+        return ip != null && ip.isNotEmpty && key != null && key.length == 16;
+
+      case ConnectionProtocol.tuyaCloudDirect:
+        final token = dev.credentials['accessToken'];
+        return token != null && token.isNotEmpty && !token.contains('demo');
+
+      case ConnectionProtocol.onePlusTvLan:
+        final ip = dev.credentials['ip'];
+        return ip != null && ip.isNotEmpty && !ip.startsWith('127.') && !dev.id.contains('test');
+
+      case ConnectionProtocol.philipsHueLocal:
+        final bridgeIp = dev.credentials['bridgeIp'] ?? linkedHueBridgeIp;
+        final username = dev.credentials['username'] ?? linkedHueUsername;
+        return bridgeIp != null && bridgeIp.isNotEmpty && username != null && username.isNotEmpty;
+
+      case ConnectionProtocol.philipsWizUdp:
+        final ip = dev.credentials['ip'];
+        return ip != null && ip.isNotEmpty && !ip.startsWith('127.');
+
+      case ConnectionProtocol.rtspOnvifCamera:
+        final ip = dev.credentials['ip'] ?? dev.credentials['rtspUrl'];
+        return ip != null && ip.isNotEmpty && !ip.toLowerCase().contains('demo');
+
+      default:
+        return false;
     }
   }
 
+  // 1. updateWasher
+  void updateWasher(String id, {String? cycle, int? waterTemp, String? spinSpeed, bool? steam}) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (cycle != null) attrs['cycle'] = cycle;
+    if (waterTemp != null) attrs['waterTemperature'] = waterTemp;
+    if (spinSpeed != null) attrs['spinSpeed'] = spinSpeed;
+    if (steam != null) attrs['steam'] = steam;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        if (cycle != null) await _controller.executeDeviceCommand(dev, 'custom.washerCycle', 'setWasherCycle', [cycle]);
+        if (waterTemp != null) await _controller.executeDeviceCommand(dev, 'custom.washerWaterTemperature', 'setWasherWaterTemperature', ['$waterTemp°C']);
+        if (spinSpeed != null) await _controller.executeDeviceCommand(dev, 'washerSpinSpeed', 'setWasherSpinSpeed', [spinSpeed]);
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
+  // 2. updateSamsungWasher
   void updateSamsungWasher(
     String id, {
     String? cycle,
     int? waterTemp,
+    String? waterTempStr,
     String? spinSpeed,
     bool? ecoBubble,
     bool? superSpeed,
     bool? aiWash,
     bool? addWashDoorLocked,
     String? recommendedRecipe,
+    String? stage,
+    int? remainingMinutes,
+    int? rinseCount,
+    bool? autoCycleLink,
+    int? detergentPercent,
+    int? softenerPercent,
+    int? drumCleanCount,
   }) {
     final idx = _devices.indexWhere((d) => d.id == id);
-    if (idx != -1) {
-      final dev = _devices[idx];
-      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
-      if (cycle != null) attrs['cycle'] = cycle;
-      if (waterTemp != null) attrs['waterTemperature'] = waterTemp;
-      if (spinSpeed != null) attrs['spinSpeed'] = spinSpeed;
-      if (ecoBubble != null) attrs['ecoBubble'] = ecoBubble;
-      if (superSpeed != null) attrs['superSpeed'] = superSpeed;
-      if (aiWash != null) attrs['aiWash'] = aiWash;
-      if (addWashDoorLocked != null) attrs['addWashDoorLocked'] = addWashDoorLocked;
-      if (recommendedRecipe != null) attrs['recommendedRecipe'] = recommendedRecipe;
-      dev.liveAttributes = attrs;
-      _saveState();
-      notifyListeners();
-    }
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (cycle != null) attrs['cycle'] = cycle;
+    if (waterTemp != null) attrs['waterTemperature'] = waterTemp;
+    if (waterTempStr != null) attrs['waterTemp'] = waterTempStr;
+    if (spinSpeed != null) attrs['spinSpeed'] = spinSpeed;
+    if (ecoBubble != null) attrs['ecoBubble'] = ecoBubble;
+    if (superSpeed != null) attrs['superSpeed'] = superSpeed;
+    if (aiWash != null) attrs['aiWash'] = aiWash;
+    if (addWashDoorLocked != null) attrs['addWashDoorLocked'] = addWashDoorLocked;
+    if (recommendedRecipe != null) attrs['recommendedRecipe'] = recommendedRecipe;
+    if (stage != null) attrs['stage'] = stage;
+    if (remainingMinutes != null) attrs['remainingMinutes'] = remainingMinutes;
+    if (rinseCount != null) attrs['rinseCount'] = rinseCount;
+    if (autoCycleLink != null) attrs['autoCycleLink'] = autoCycleLink;
+    if (detergentPercent != null) attrs['detergentPercent'] = detergentPercent;
+    if (softenerPercent != null) attrs['softenerPercent'] = softenerPercent;
+    if (drumCleanCount != null) attrs['drumCleanCount'] = drumCleanCount;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        if (cycle != null) await _controller.executeDeviceCommand(dev, 'custom.washerCycle', 'setWasherCycle', [cycle]);
+        if (waterTempStr != null || waterTemp != null) {
+          await _controller.executeDeviceCommand(dev, 'custom.washerWaterTemperature', 'setWasherWaterTemperature', [waterTempStr ?? '$waterTemp°C']);
+        }
+        if (spinSpeed != null) await _controller.executeDeviceCommand(dev, 'washerSpinSpeed', 'setWasherSpinSpeed', [spinSpeed]);
+        if (ecoBubble != null) await _controller.executeDeviceCommand(dev, 'custom.washerEcoBubble', 'setEcoBubble', [ecoBubble ? 'on' : 'off']);
+        if (superSpeed != null) await _controller.executeDeviceCommand(dev, 'custom.washerSuperSpeed', 'setSuperSpeed', [superSpeed ? 'on' : 'off']);
+        if (aiWash != null) await _controller.executeDeviceCommand(dev, 'custom.washerAiWash', 'setAiWash', [aiWash ? 'on' : 'off']);
+        if (stage != null) await _controller.executeDeviceCommand(dev, 'washerOperatingState', 'setWasherJobState', [stage]);
+        if (rinseCount != null) await _controller.executeDeviceCommand(dev, 'custom.washerRinseCycles', 'setRinseCycles', [rinseCount]);
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
   }
 
+  // 3. setDevicePrimaryValue
+  void setDevicePrimaryValue(String id, double val) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevVal = dev.primaryValue;
+    final prevWatts = dev.liveWatts;
+
+    dev.primaryValue = val;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    _applianceDebounceTimers[dev.id]?.cancel();
+    _applianceDebounceTimers[dev.id] = Timer(const Duration(milliseconds: 300), () async {
+      try {
+        await _controller.setPrimaryLevel(dev, val);
+      } catch (e) {
+        dev.primaryValue = prevVal;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    });
+  }
+
+  // 4. updateSamsungAc
+  void updateSamsungAc(
+    String id, {
+    double? targetTemp,
+    bool? windFree,
+    bool? goodSleep,
+    int? pm1AirQuality,
+    bool? aiEnergyMode,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevPrimaryValue = dev.primaryValue;
+    final prevWatts = dev.liveWatts;
+
+    if (targetTemp != null) dev.primaryValue = targetTemp;
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (windFree != null) attrs['windFree'] = windFree;
+    if (goodSleep != null) attrs['goodSleep'] = goodSleep;
+    if (pm1AirQuality != null) attrs['pm1AirQuality'] = pm1AirQuality;
+    if (aiEnergyMode != null) attrs['aiEnergyMode'] = aiEnergyMode;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    _applianceDebounceTimers[dev.id]?.cancel();
+    _applianceDebounceTimers[dev.id] = Timer(const Duration(milliseconds: 300), () async {
+      try {
+        if (targetTemp != null) {
+          await _controller.executeDeviceCommand(dev, 'thermostatCoolingSetpoint', 'setCoolingSetpoint', [targetTemp.round()]);
+        }
+        if (windFree != null) {
+          await _controller.executeDeviceCommand(dev, 'custom.airConditionerOptionalMode', 'setAirConditionerOptionalMode', [windFree ? 'windFree' : 'off']);
+        }
+        if (goodSleep != null) {
+          await _controller.executeDeviceCommand(dev, 'custom.airConditionerOptionalMode', 'setAirConditionerOptionalMode', [goodSleep ? 'sleep' : 'off']);
+        }
+        if (aiEnergyMode != null) {
+          await _controller.executeDeviceCommand(dev, 'samsungce.energySavingOperation', 'setEnergySavingOperation', [aiEnergyMode ? 'on' : 'off']);
+        }
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.primaryValue = prevPrimaryValue;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    });
+  }
+
+  // 5. updateSamsungFridge
+  void updateSamsungFridge(
+    String id, {
+    double? fridgeTemp,
+    double? freezerTemp,
+    String? flexZoneMode,
+    bool? powerCool,
+    bool? powerFreeze,
+    bool? iceBites,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (fridgeTemp != null) attrs['fridgeTemp'] = fridgeTemp;
+    if (freezerTemp != null) attrs['freezerTemp'] = freezerTemp;
+    if (flexZoneMode != null) attrs['flexZoneMode'] = flexZoneMode;
+    if (powerCool != null) attrs['powerCool'] = powerCool;
+    if (powerFreeze != null) attrs['powerFreeze'] = powerFreeze;
+    if (iceBites != null) attrs['iceBites'] = iceBites;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        if (fridgeTemp != null) await _controller.executeDeviceCommand(dev, 'custom.fridgeSetpoint', 'setFridgeTemperature', [fridgeTemp.round()]);
+        if (freezerTemp != null) await _controller.executeDeviceCommand(dev, 'custom.freezerSetpoint', 'setFreezerTemperature', [freezerTemp.round()]);
+        if (flexZoneMode != null) await _controller.executeDeviceCommand(dev, 'custom.fridgeFlexZone', 'setFlexZoneMode', [flexZoneMode]);
+        if (powerCool != null) await _controller.executeDeviceCommand(dev, 'custom.fridgePowerCool', 'setPowerCool', [powerCool ? 'on' : 'off']);
+        if (powerFreeze != null) await _controller.executeDeviceCommand(dev, 'custom.fridgePowerFreeze', 'setPowerFreeze', [powerFreeze ? 'on' : 'off']);
+        if (iceBites != null) await _controller.executeDeviceCommand(dev, 'custom.iceMaker', 'setIceMakerMode', [iceBites ? 'iceBites' : 'off']);
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
+  // 6. updateSamsungTv
+  void updateSamsungTv(
+    String id, {
+    bool? artMode,
+    bool? lightSync,
+    String? selectedArtwork,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (artMode != null) attrs['artMode'] = artMode;
+    if (lightSync != null) attrs['lightSync'] = lightSync;
+    if (selectedArtwork != null) attrs['selectedArtwork'] = selectedArtwork;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        if (artMode != null) await _controller.executeDeviceCommand(dev, 'custom.artMode', 'setArtMode', [artMode ? 'on' : 'off']);
+        if (lightSync != null) await _controller.executeDeviceCommand(dev, 'custom.lightSync', 'setLightSync', [lightSync ? 'on' : 'off']);
+        if (selectedArtwork != null) await _controller.executeDeviceCommand(dev, 'custom.artMode', 'selectArtwork', [selectedArtwork]);
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
+  // 7. updateTv
   void updateTv(String id, {String? app, int? volume, String? pictureMode}) {
     final idx = _devices.indexWhere((d) => d.id == id);
-    if (idx != -1) {
-      final dev = _devices[idx];
-      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
-      if (app != null) attrs['currentApp'] = app;
-      if (volume != null) attrs['volume'] = volume;
-      if (pictureMode != null) attrs['pictureMode'] = pictureMode;
-      dev.liveAttributes = attrs;
-      _saveState();
-      notifyListeners();
-    }
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (app != null) attrs['currentApp'] = app;
+    if (volume != null) attrs['volume'] = volume;
+    if (pictureMode != null) attrs['pictureMode'] = pictureMode;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        if (app != null) await _controller.executeDeviceCommand(dev, 'mediaPlayback', 'launchApp', [app]);
+        if (volume != null) await _controller.executeDeviceCommand(dev, 'audioVolume', 'setVolume', [volume]);
+        if (pictureMode != null) await _controller.executeDeviceCommand(dev, 'custom.pictureMode', 'setPictureMode', [pictureMode]);
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
   }
 
+  // 8. updateWiproBulb
   void updateWiproBulb(String id, {double? brightness, Color? color, int? colorTempKelvin, String? scene, bool? musicSync}) {
     final idx = _devices.indexWhere((d) => d.id == id);
-    if (idx != -1) {
-      final dev = _devices[idx];
-      if (brightness != null) dev.primaryValue = (brightness * 100.0).clamp(0.0, 100.0);
-      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
-      if (scene != null) attrs['activeScene'] = scene;
-      if (musicSync != null) attrs['musicSync'] = musicSync;
-      dev.liveAttributes = attrs;
-      _saveState();
-      notifyListeners();
-    }
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevPrimaryValue = dev.primaryValue;
+    final prevWatts = dev.liveWatts;
+
+    if (brightness != null) dev.primaryValue = (brightness * 100.0).clamp(0.0, 100.0);
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (scene != null) attrs['activeScene'] = scene;
+    if (musicSync != null) attrs['musicSync'] = musicSync;
+    if (color != null) attrs['color'] = color.value.toRadixString(16);
+    if (colorTempKelvin != null) attrs['colorTempKelvin'] = colorTempKelvin;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    _applianceDebounceTimers[dev.id]?.cancel();
+    _applianceDebounceTimers[dev.id] = Timer(const Duration(milliseconds: 250), () async {
+      try {
+        if (dev.protocol == ConnectionProtocol.tuyaLocalLan) {
+          final Map<String, dynamic> dps = {'20': dev.isOn};
+          if (brightness != null) {
+            dps['21'] = 'white';
+            dps['22'] = (brightness * 1000).round().clamp(10, 1000);
+          }
+          if (colorTempKelvin != null) {
+            dps['21'] = 'white';
+            dps['23'] = ((colorTempKelvin - 2700) / (6500 - 2700) * 1000).round().clamp(0, 1000);
+          }
+          if (color != null) {
+            final hsv = HSVColor.fromColor(color);
+            final hHex = hsv.hue.round().toRadixString(16).padLeft(4, '0');
+            final sHex = (hsv.saturation * 1000).round().toRadixString(16).padLeft(4, '0');
+            final vHex = (hsv.value * 1000).round().toRadixString(16).padLeft(4, '0');
+            dps['21'] = 'colour';
+            dps['24'] = '$hHex$sHex$vHex';
+          }
+          if (scene != null) {
+            dps['21'] = 'scene';
+            dps['25'] = scene;
+          }
+          if (musicSync != null) {
+            dps['21'] = musicSync ? 'music' : 'white';
+            dps['26'] = musicSync ? '0100000000' : '00';
+          }
+          await _controller.sendTuyaLocalDps(dev, dps);
+        } else if (dev.protocol == ConnectionProtocol.tuyaCloudDirect) {
+          if (brightness != null) await _controller.setPrimaryLevel(dev, dev.primaryValue);
+        }
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.primaryValue = prevPrimaryValue;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    });
   }
 
+  // 9. updateLgAc
   void updateLgAc(String id, {double? targetTemp, String? fanSpeed, bool? jetCool}) {
     final idx = _devices.indexWhere((d) => d.id == id);
-    if (idx != -1) {
-      final dev = _devices[idx];
-      if (targetTemp != null) dev.primaryValue = targetTemp;
-      final attrs = Map<String, dynamic>.from(dev.liveAttributes);
-      if (fanSpeed != null) attrs['fanSpeed'] = fanSpeed;
-      if (jetCool != null) attrs['jetCool'] = jetCool;
-      dev.liveAttributes = attrs;
-      _saveState();
-      notifyListeners();
-    }
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevPrimaryValue = dev.primaryValue;
+    final prevWatts = dev.liveWatts;
+
+    if (targetTemp != null) dev.primaryValue = targetTemp;
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (fanSpeed != null) attrs['fanSpeed'] = fanSpeed;
+    if (jetCool != null) attrs['jetCool'] = jetCool;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    _applianceDebounceTimers[dev.id]?.cancel();
+    _applianceDebounceTimers[dev.id] = Timer(const Duration(milliseconds: 300), () async {
+      try {
+        await zeroTouch.controlLgAirConditioner(
+          device: dev,
+          targetCelsius: targetTemp,
+          jetCoolMode: jetCool,
+          patTokenOverride: linkedLgThinqPat,
+        );
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.primaryValue = prevPrimaryValue;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    });
   }
+
+  // 10. updateLgWashTower
+  void updateLgWashTower(
+    String id, {
+    bool? turboWash360,
+    int? ezDispenseDetergent,
+    int? ezDispenseSoftener,
+    bool? steamPlus,
+    bool? smartPairing,
+    String? stage,
+    int? remainingMinutes,
+    String? dryLevel,
+    int? dryerRemainingMinutes,
+    String? dryerStage,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (turboWash360 != null) attrs['turboWash360'] = turboWash360;
+    if (ezDispenseDetergent != null) attrs['ezDispenseDetergent'] = ezDispenseDetergent;
+    if (ezDispenseSoftener != null) attrs['ezDispenseSoftener'] = ezDispenseSoftener;
+    if (steamPlus != null) attrs['steamPlus'] = steamPlus;
+    if (smartPairing != null) attrs['smartPairing'] = smartPairing;
+    if (stage != null) attrs['stage'] = stage;
+    if (remainingMinutes != null) attrs['remainingMinutes'] = remainingMinutes;
+    if (dryLevel != null) attrs['dryLevel'] = dryLevel;
+    if (dryerRemainingMinutes != null) attrs['dryerRemainingMinutes'] = dryerRemainingMinutes;
+    if (dryerStage != null) attrs['dryerStage'] = dryerStage;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        await zeroTouch.controlLgWashTower(
+          dev,
+          {
+            if (turboWash360 != null) 'turboWash360': turboWash360,
+            if (ezDispenseDetergent != null) 'ezDispenseDetergent': ezDispenseDetergent,
+            if (ezDispenseSoftener != null) 'ezDispenseSoftener': ezDispenseSoftener,
+            if (steamPlus != null) 'steamPlus': steamPlus,
+            if (smartPairing != null) 'smartPairing': smartPairing,
+            if (stage != null) 'stage': stage,
+            if (dryLevel != null) 'dryLevel': dryLevel,
+            if (dryerStage != null) 'dryerStage': dryerStage,
+          },
+          patTokenOverride: linkedLgThinqPat,
+        );
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
+  // 11. updateLgFridge
+  void updateLgFridge(
+    String id, {
+    bool? instaViewTransparent,
+    bool? craftIce,
+    bool? doorCooling,
+    String? hygieneFresh,
+    bool? expressFreeze,
+    bool? expressCool,
+    double? fridgeTemp,
+    double? freezerTemp,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (instaViewTransparent != null) attrs['instaViewTransparent'] = instaViewTransparent;
+    if (craftIce != null) attrs['craftIce'] = craftIce;
+    if (doorCooling != null) attrs['doorCooling'] = doorCooling;
+    if (hygieneFresh != null) attrs['hygieneFresh'] = hygieneFresh;
+    if (expressFreeze != null) attrs['expressFreeze'] = expressFreeze;
+    if (expressCool != null) attrs['expressCool'] = expressCool;
+    if (fridgeTemp != null) attrs['fridgeTemp'] = fridgeTemp;
+    if (freezerTemp != null) attrs['freezerTemp'] = freezerTemp;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        await zeroTouch.controlLgFridge(
+          dev,
+          {
+            if (instaViewTransparent != null) 'instaViewTransparent': instaViewTransparent,
+            if (craftIce != null) 'craftIce': craftIce,
+            if (doorCooling != null) 'doorCooling': doorCooling,
+            if (hygieneFresh != null) 'hygieneFresh': hygieneFresh,
+            if (expressFreeze != null) 'expressFreeze': expressFreeze,
+            if (expressCool != null) 'expressCool': expressCool,
+            if (fridgeTemp != null) 'fridgeTemp': fridgeTemp,
+            if (freezerTemp != null) 'freezerTemp': freezerTemp,
+          },
+          patTokenOverride: linkedLgThinqPat,
+        );
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
+  // 12. updateLgAeroTower
+  void updateLgAeroTower(
+    String id, {
+    int? cleanBoosterTilt,
+    String? airflowMode,
+    bool? uvNano,
+    int? pm1Laser,
+    bool? petCare,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (cleanBoosterTilt != null) attrs['cleanBoosterTilt'] = cleanBoosterTilt;
+    if (airflowMode != null) attrs['airflowMode'] = airflowMode;
+    if (uvNano != null) attrs['uvNano'] = uvNano;
+    if (pm1Laser != null) attrs['pm1Laser'] = pm1Laser;
+    if (petCare != null) attrs['petCare'] = petCare;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        await zeroTouch.controlLgAeroTower(
+          dev,
+          {
+            if (cleanBoosterTilt != null) 'cleanBoosterTilt': cleanBoosterTilt,
+            if (airflowMode != null) 'airflowMode': airflowMode,
+            if (uvNano != null) 'uvNano': uvNano,
+            if (petCare != null) 'petCare': petCare,
+          },
+          patTokenOverride: linkedLgThinqPat,
+        );
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
+  // 13. updateLgStyler
+  void updateLgStyler(
+    String id, {
+    String? movingHangerSpeed,
+    int? movingHangerRpm,
+    bool? trueSteam,
+    bool? pantsCrease,
+    bool? gentleDry,
+    String? stylerCourse,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (movingHangerSpeed != null) attrs['movingHangerSpeed'] = movingHangerSpeed;
+    if (movingHangerRpm != null) attrs['movingHangerRpm'] = movingHangerRpm;
+    if (trueSteam != null) attrs['trueSteam'] = trueSteam;
+    if (pantsCrease != null) attrs['pantsCrease'] = pantsCrease;
+    if (gentleDry != null) attrs['gentleDry'] = gentleDry;
+    if (stylerCourse != null) attrs['stylerCourse'] = stylerCourse;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        await zeroTouch.controlLgStyler(
+          dev,
+          {
+            if (movingHangerSpeed != null) 'movingHangerSpeed': movingHangerSpeed,
+            if (movingHangerRpm != null) 'movingHangerRpm': movingHangerRpm,
+            if (trueSteam != null) 'trueSteam': trueSteam,
+            if (pantsCrease != null) 'pantsCrease': pantsCrease,
+            if (gentleDry != null) 'gentleDry': gentleDry,
+            if (stylerCourse != null) 'stylerCourse': stylerCourse,
+          },
+          patTokenOverride: linkedLgThinqPat,
+        );
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
+  // 14. updateLgDishwasher
+  void updateLgDishwasher(
+    String id, {
+    String? quadWashArmPressure,
+    bool? trueSteamDishwash,
+    bool? autoDoorOpen,
+    String? dishwasherCourse,
+  }) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    if (quadWashArmPressure != null) attrs['quadWashArmPressure'] = quadWashArmPressure;
+    if (trueSteamDishwash != null) attrs['trueSteamDishwash'] = trueSteamDishwash;
+    if (autoDoorOpen != null) attrs['autoDoorOpen'] = autoDoorOpen;
+    if (dishwasherCourse != null) attrs['dishwasherCourse'] = dishwasherCourse;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        await zeroTouch.controlLgDishwasher(
+          dev,
+          {
+            if (quadWashArmPressure != null) 'quadWashArmPressure': quadWashArmPressure,
+            if (trueSteamDishwash != null) 'trueSteamDishwash': trueSteamDishwash,
+            if (autoDoorOpen != null) 'autoDoorOpen': autoDoorOpen,
+            if (dishwasherCourse != null) 'dishwasherCourse': dishwasherCourse,
+          },
+          patTokenOverride: linkedLgThinqPat,
+        );
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
+  // 15. triggerLgThinqUp
+  void triggerLgThinqUp(String id, {required String installedFeature}) {
+    final idx = _devices.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    final dev = _devices[idx];
+    final prevAttrs = Map<String, dynamic>.from(dev.liveAttributes);
+    final prevWatts = dev.liveWatts;
+
+    final attrs = Map<String, dynamic>.from(dev.liveAttributes);
+    attrs['thinqUpUpdate'] = false;
+    attrs['thinqUpInstalledFeature'] = installedFeature;
+    dev.liveAttributes = attrs;
+    _controller.computeDeviceLiveWattage(dev);
+    _saveState();
+    notifyListeners();
+
+    if (!_isHardwareExecutable(dev)) return;
+
+    unawaited(() async {
+      try {
+        await zeroTouch.activateLgThinqUpFeature(
+          dev,
+          installedFeature,
+          patTokenOverride: linkedLgThinqPat,
+        );
+      } catch (e) {
+        dev.liveAttributes = prevAttrs;
+        dev.liveWatts = prevWatts;
+        _controller.computeDeviceLiveWattage(dev);
+        lastGlobalError = e.toString().replaceAll('Exception: ', '');
+        await _saveState();
+        notifyListeners();
+      }
+    }());
+  }
+
 
   // ---------------------------------------------------------------------------
   // IMPORT & PAIRING METHODS
@@ -728,16 +1508,17 @@ class RealHomeProvider extends ChangeNotifier {
   }
 
   Future<void> addDirectLanDevice(RealSmartDevice device) async {
+    final sanitized = sanitizeDeviceCredentials(device);
     isBusy = true;
     lastGlobalError = null;
     notifyListeners();
     try {
-      await _controller.refreshDeviceStatus(device);
-      _devices.removeWhere((d) => d.id == device.id);
-      _devices.add(device);
+      await _controller.refreshDeviceStatus(sanitized);
+      _devices.removeWhere((d) => d.id == sanitized.id);
+      _devices.add(sanitized);
       await _saveState();
     } catch (e) {
-      lastGlobalError = 'Could not reach ${device.name} at ${device.credentials['ip']}: $e';
+      lastGlobalError = 'Could not reach ${sanitized.name} at ${sanitized.credentials['ip']}: $e';
       rethrow;
     } finally {
       isBusy = false;
@@ -746,14 +1527,36 @@ class RealHomeProvider extends ChangeNotifier {
   }
 
   void addDeviceDirect(RealSmartDevice device) {
-    if (device.liveWatts == 0.0) {
-      _controller.computeDeviceLiveWattage(device);
+    final sanitized = sanitizeDeviceCredentials(device);
+    if (sanitized.liveWatts == 0.0) {
+      _controller.computeDeviceLiveWattage(sanitized);
     }
-    _devices.removeWhere((d) => d.id == device.id);
-    _devices.add(device);
+    _devices.removeWhere((d) => d.id == sanitized.id);
+    _devices.add(sanitized);
     _saveState();
     notifyListeners();
   }
+
+  /// Exposes the leaving-home power-off logic for unit tests without requiring
+  /// a real OS bridge. Devices in the [exemptCategories] set are preserved.
+  @visibleForTesting
+  Future<void> simulatePresenceDeparture() async {
+    const exemptCategories = {'fridge', 'camera', 'washer'};
+    for (final d
+        in List<RealSmartDevice>.from(
+          _devices.where((d) => d.isOn && !exemptCategories.contains(d.category)),
+        )) {
+      try {
+        await toggleDevicePower(d);
+      } catch (_) {}
+    }
+  }
+
+  /// Exposes the time-automation evaluation loop for unit tests without
+  /// starting the real polling timer.
+  @visibleForTesting
+  Future<void> evaluateTimeAutomationsForTesting() =>
+      _evaluateTimeAutomations();
 
   Future<void> clearAllDevices() async {
     _devices.clear();
@@ -761,6 +1564,205 @@ class RealHomeProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('unified_home_paired_devices_v4', '[]');
     await prefs.setString('real_devices_v2', '[]');
+    await _saveState();
+    notifyListeners();
+  }
+
+  Future<void> loadSampleSmartHome() async {
+    _hasExplicitlyClearedDevices = false;
+    _devices.clear();
+    final List<RealSmartDevice> sampleDevices = [
+      RealSmartDevice(
+        id: 'samsung_washer_ecobubble_01',
+        name: 'Samsung AI Ecobubble™ Washer',
+        room: 'Laundry',
+        category: 'washer',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: const {'vendor': 'demo', 'token': 'demo_st_token', 'type': 'samsung_washer'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 1400.0,
+        liveAttributes: {
+          'machineState': 'run',
+          'cycle': 'AI Wash',
+          'remainingMinutes': 38,
+          'detergentLevel': 78,
+          'softenerLevel': 62,
+          'ecobubbleActive': true,
+          'drumCleanCycleCount': 12,
+        },
+      ),
+      RealSmartDevice(
+        id: 'lg_ac_dualcool_01',
+        name: 'LG ThinQ DualCool™ AI AC',
+        room: 'Living',
+        category: 'ac',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: const {'vendor': 'demo', 'token': 'demo_lg_token', 'type': 'lg_ac'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 23.0,
+        liveAttributes: {
+          'mode': 'cool',
+          'fanSpeed': 'auto',
+          'jetCool': true,
+          'goodSleep': false,
+          'roomTemp': 24.5,
+          'pm1_0': 12,
+          'pm2_5': 18,
+          'energySaving': true,
+        },
+      ),
+      RealSmartDevice(
+        id: 'samsung_ac_windfree_01',
+        name: 'Samsung WindFree™ Micro-Hole AC',
+        room: 'Bedroom',
+        category: 'ac',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: const {'vendor': 'demo', 'token': 'demo_st_token', 'type': 'samsung_ac'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 22.0,
+        liveAttributes: {
+          'mode': 'windfree',
+          'fanSpeed': 'quiet',
+          'goodSleep': true,
+          'roomTemp': 22.8,
+        },
+      ),
+      RealSmartDevice(
+        id: 'lg_washtower_01',
+        name: 'LG WashTower™ AI DirectDrive',
+        room: 'Laundry',
+        category: 'washer',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: const {'vendor': 'demo', 'token': 'demo_lg_token', 'type': 'lg_washtower'},
+        isOn: false,
+        isOnline: true,
+        primaryValue: 1200.0,
+        liveAttributes: {
+          'turboWash360': true,
+          'ezDispenseDetergent': 85,
+          'ezDispenseSoftener': 90,
+          'steamPlus': true,
+          'smartPairing': true,
+        },
+      ),
+      RealSmartDevice(
+        id: 'samsung_fridge_familyhub_01',
+        name: 'Samsung Family Hub™ Refrigerator',
+        room: 'Kitchen',
+        category: 'fridge',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: const {'vendor': 'demo', 'token': 'demo_st_token', 'type': 'samsung_fridge'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 3.0,
+        liveAttributes: {
+          'fridgeTemp': 3.0,
+          'freezerTemp': -19.0,
+          'flexZoneMode': 'Beverage (1°C)',
+          'doorOpen': false,
+        },
+      ),
+      RealSmartDevice(
+        id: 'samsung_tv_theframe_01',
+        name: 'Samsung The Frame 65" 4K',
+        room: 'Living',
+        category: 'tv',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: const {'vendor': 'demo', 'token': 'demo_st_token', 'type': 'samsung_tv'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 65.0,
+        liveAttributes: {
+          'artMode': true,
+          'ambientLightSync': true,
+          'currentArt': 'Starry Night',
+        },
+      ),
+      RealSmartDevice(
+        id: 'lg_fridge_instaview_01',
+        name: 'LG InstaView™ Door-in-Door Refrigerator',
+        room: 'Kitchen',
+        category: 'fridge',
+        protocol: ConnectionProtocol.smartThingsCloud,
+        credentials: const {'vendor': 'demo', 'token': 'demo_lg_token', 'type': 'lg_fridge'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 2.0,
+        liveAttributes: {
+          'craftIce': true,
+          'linearCooling': true,
+          'pureNFresh': true,
+        },
+      ),
+      RealSmartDevice(
+        id: 'light_living_chandelier_01',
+        name: 'Living Room Halo Chandelier',
+        room: 'Living',
+        category: 'light',
+        protocol: ConnectionProtocol.homeAssistantBridge,
+        credentials: const {'vendor': 'demo', 'token': 'demo_ha_token'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 80.0,
+        liveAttributes: {'colorTemp': 'warm_white'},
+      ),
+      RealSmartDevice(
+        id: 'light_living_backlight_01',
+        name: 'TV Bias Ambilight Strip',
+        room: 'Living',
+        category: 'light',
+        protocol: ConnectionProtocol.tuyaLocalLan,
+        credentials: const {'vendor': 'demo', 'ip': '192.168.1.101', 'key': 'demokey'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 60.0,
+        liveAttributes: {'color': 'cyan'},
+      ),
+      RealSmartDevice(
+        id: 'light_bed_pendant_01',
+        name: 'Bedroom Nightstand Lamp',
+        room: 'Bedroom',
+        category: 'light',
+        protocol: ConnectionProtocol.tuyaCloudDirect,
+        credentials: const {'vendor': 'demo', 'token': 'demo_wipro_token'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 35.0,
+        liveAttributes: {'colorTemp': 'amber'},
+      ),
+      RealSmartDevice(
+        id: 'light_kitchen_island_01',
+        name: 'Kitchen Island Downlights',
+        room: 'Kitchen',
+        category: 'light',
+        protocol: ConnectionProtocol.homeAssistantBridge,
+        credentials: const {'vendor': 'demo', 'token': 'demo_ha_token'},
+        isOn: false,
+        isOnline: true,
+        primaryValue: 100.0,
+        liveAttributes: {},
+      ),
+      RealSmartDevice(
+        id: 'charger_garage_01',
+        name: 'Tesla Wall Connector EV Charger',
+        room: 'Garage',
+        category: 'socket',
+        protocol: ConnectionProtocol.homeAssistantBridge,
+        credentials: const {'vendor': 'demo', 'token': 'demo_ha_token'},
+        isOn: true,
+        isOnline: true,
+        primaryValue: 7.4,
+        liveAttributes: {'power_kw': 7.4, 'charge_rate': '32A'},
+      ),
+    ];
+
+    for (final dev in sampleDevices) {
+      _controller.computeDeviceLiveWattage(dev);
+    }
+    _devices.addAll(sampleDevices);
     await _saveState();
     notifyListeners();
   }
@@ -814,10 +1816,11 @@ class RealHomeProvider extends ChangeNotifier {
     String capability,
     String command, [
     List<dynamic> arguments = const [],
+    String? component,
   ]) async {
     lastGlobalError = null;
     try {
-      await _controller.executeDeviceCommand(device, capability, command, arguments);
+      await _controller.executeDeviceCommand(device, capability, command, arguments, component);
       await _saveState();
       notifyListeners();
     } catch (e) {
@@ -839,12 +1842,16 @@ class RealHomeProvider extends ChangeNotifier {
     _controller.computeDeviceLiveWattage(device);
     notifyListeners();
 
+    if (device.isDummy) {
+      device.markOnlineSuccess();
+      _controller.computeDeviceLiveWattage(device);
+      await _saveState();
+      return;
+    }
+
     try {
-      if (device.credentials['vendor'] == 'lg_thinq') {
-        await zeroTouch.controlLgAirConditioner(device: device, powerOn: targetState);
-      } else {
-        await _controller.setPower(device, targetState);
-      }
+      await _controller.setPower(device, targetState);
+      device.markOnlineSuccess();
     } catch (e) {
       // Revert on network/controller failure
       device.isOn = previousState;
@@ -909,15 +1916,19 @@ class RealHomeProvider extends ChangeNotifier {
     _controller.computeDeviceLiveWattage(device);
     notifyListeners();
 
+    if (device.isDummy) {
+      device.markOnlineSuccess();
+      _controller.computeDeviceLiveWattage(device);
+      await _saveState();
+      return;
+    }
+
     // 250ms debouncer to avoid flooding IoT hardware with socket requests
     _levelDebounceTimers[device.id]?.cancel();
     _levelDebounceTimers[device.id] = Timer(const Duration(milliseconds: 250), () async {
       try {
-        if (device.credentials['vendor'] == 'lg_thinq' && device.category == 'ac') {
-          await zeroTouch.controlLgAirConditioner(device: device, targetCelsius: newValue);
-        } else {
-          await _controller.setPrimaryLevel(device, newValue);
-        }
+        await _controller.setPrimaryLevel(device, newValue);
+        device.markOnlineSuccess();
         await _saveState();
       } catch (e) {
         lastGlobalError = e.toString().replaceAll('Exception: ', '');
@@ -964,11 +1975,21 @@ class RealHomeProvider extends ChangeNotifier {
       await Future.wait(
         _devices.map((dev) async {
           try {
-            await _controller.refreshDeviceStatus(dev).timeout(const Duration(seconds: 3));
-            await _checkWasherStateChange(dev);
-          } catch (_) {
+            await _controller.refreshDeviceStatus(dev).timeout(const Duration(seconds: 8));
+            dev.markOnlineSuccess();
+          } catch (e) {
+            dev.consecutiveFailedPolls++;
+            dev.lastError = e.toString().replaceAll('Exception: ', '');
+            if (dev.consecutiveFailedPolls >= 3) {
+              // Mark device offline after 3 consecutive failures, but preserve
+              // the last-known isOn state so that running appliances (e.g. a
+              // Samsung Washer that had a momentary Wi-Fi hiccup) are not
+              // falsely reported as powered off (Bug 19).
+              dev.isOnline = false;
+            }
             _controller.computeDeviceLiveWattage(dev);
           }
+          await _checkWasherStateChange(dev);
         }),
       );
     } finally {
@@ -1208,7 +2229,15 @@ class RealHomeProvider extends ChangeNotifier {
 
     for (final rule in _automations) {
       if (!rule.isEnabled || rule.triggerType != 'time') continue;
-      if (rule.lastTriggeredAt != null && now.difference(rule.lastTriggeredAt!).inSeconds < 45) {
+      // Guard: skip if this rule already fired during the current clock minute.
+      // Using a same-minute comparison avoids the 45 s cooldown < 60 s tick
+      // window that caused double-fires (Bug 16).
+      if (rule.lastTriggeredAt != null &&
+          rule.lastTriggeredAt!.year == now.year &&
+          rule.lastTriggeredAt!.month == now.month &&
+          rule.lastTriggeredAt!.day == now.day &&
+          rule.lastTriggeredAt!.hour == now.hour &&
+          rule.lastTriggeredAt!.minute == now.minute) {
         continue;
       }
       if (rule.triggerValue == currentHm) {

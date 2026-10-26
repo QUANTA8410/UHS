@@ -8,68 +8,89 @@
 
     <!-- Outer Frosted Glass Squircle Rim -->
     <path
-        android:pathData="M34,24 L74,24 C80,24 84,28 84,34 L84,74 C84,80 80,84 74,84 L34,84 C28,84 24,80 24,74 L24,34 C24,28 28,24 34,24 Z"
+        android:pathData="M34,22 L74,22 C81,22 86,27 86,34 L86,74 C86,81 81,86 74,86 L34,86 C27,86 22,81 22,74 L22,34 C22,27 27,22 34,22 Z"
         android:strokeWidth="1.2"
-        android:strokeColor="#4DFFFFFF"
+        android:strokeColor="#55FFFFFF"
         android:fillColor="#12FFFFFF" />
 
-    <!-- Isometric 3D House Roof / Top Diamond (Liquid Cyan Glass) -->
-    <path android:pathData="M54,29 L76,41.5 L54,54 L32,41.5 Z">
+    <!-- Isometric 3D House Roof / Top Diamond (Samsung SmartThings Cyan to Sapphire Glass) -->
+    <path android:pathData="M54,28 L76,40.5 L54,53 L32,40.5 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="linear"
                 android:startX="32"
-                android:startY="29"
+                android:startY="28"
                 android:endX="76"
-                android:endY="54"
-                android:startColor="#CC64D2FF"
-                android:endColor="#550A84FF" />
+                android:endY="53"
+                android:startColor="#FF00E5FF"
+                android:endColor="#FF0A84FF" />
         </aapt:attr>
     </path>
 
-    <!-- Isometric Left Extruded Wall (Warm Amber Interior Glow) -->
-    <path android:pathData="M32,41.5 L54,54 L54,77 L32,64.5 Z">
+    <!-- Isometric Left Wall (LG ThinQ Ruby/Magenta Glass) -->
+    <path android:pathData="M32,40.5 L54,53 L54,76 L32,63.5 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="linear"
                 android:startX="32"
-                android:startY="41.5"
+                android:startY="40.5"
                 android:endX="54"
-                android:endY="77"
-                android:startColor="#EEFFB340"
-                android:endColor="#BBFF6B00" />
+                android:endY="76"
+                android:startColor="#FFFF2A6D"
+                android:endColor="#FFA50034" />
         </aapt:attr>
     </path>
 
-    <!-- Isometric Right Extruded Wall (Deep Glass Shadow + Cyan Specular) -->
-    <path android:pathData="M54,54 L76,41.5 L76,64.5 L54,77 Z">
+    <!-- Isometric Right Wall (Deep Obsidian Sapphire Glass) -->
+    <path android:pathData="M54,53 L76,40.5 L76,63.5 L54,76 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="linear"
                 android:startX="54"
-                android:startY="41.5"
+                android:startY="40.5"
                 android:endX="76"
-                android:endY="77"
-                android:startColor="#CC1E3A8A"
-                android:endColor="#DD0F172A" />
+                android:endY="76"
+                android:startColor="#FF1E293B"
+                android:endColor="#FF0B132B" />
         </aapt:attr>
     </path>
 
-    <!-- Inner Glowing Room Cutaway Window (Left Wall) -->
+    <!-- Inner Luminous Living Room Window (Left Wall) -->
     <path
-        android:pathData="M37,48.5 L49,55.5 L49,68.5 L37,61.5 Z"
-        android:fillColor="#FFFFF4D6" />
+        android:pathData="M37,47.5 L49,54.5 L49,67.5 L37,60.5 Z"
+        android:fillColor="#FFFFB400" />
 
-    <!-- Inner Glowing Smart Climate Window (Right Wall) -->
+    <!-- Specular Glass Silhouette Edges -->
     <path
-        android:pathData="M59,55.5 L71,48.5 L71,61.5 L59,68.5 Z"
-        android:fillColor="#AA00D4FF" />
-
-    <!-- Specular Glass Edge Highlights -->
-    <path
-        android:pathData="M54,29 L76,41.5 L54,54 L32,41.5 Z M54,54 L54,77 M32,41.5 L32,64.5 L54,77 L76,64.5 L76,41.5"
-        android:strokeWidth="1.6"
+        android:pathData="M54,28 L76,40.5 L54,53 L32,40.5 Z M54,53 L54,76 M32,40.5 L32,63.5 L54,76 L76,63.5 L76,40.5"
+        android:strokeWidth="1.5"
         android:strokeColor="#EEFFFFFF"
         android:strokeLineJoin="round"
         android:fillColor="#00000000" />
+
+    <!-- Central Glowing Quantum Smart Core -->
+    <path
+        android:pathData="M54,59.5m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0"
+        android:fillColor="#FFFFF0D0" />
+    <path
+        android:pathData="M54,56.5 L57,59 L56,59 L56,62 L52,62 L52,59 L51,59 Z"
+        android:fillColor="#FF0D1527" />
+
+    <!-- 4 Interconnected Satellite Brand Nodes -->
+    <!-- Top Node: Samsung SmartThings Cyan -->
+    <path
+        android:pathData="M54,23m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0"
+        android:fillColor="#FF00E5FF" />
+    <!-- Left Node: LG ThinQ Ruby -->
+    <path
+        android:pathData="M26,48m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0"
+        android:fillColor="#FFFF2A6D" />
+    <!-- Right Node: Matter / Tuya Emerald -->
+    <path
+        android:pathData="M82,48m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0"
+        android:fillColor="#FF00E676" />
+    <!-- Bottom Node: Philips Hue Amber -->
+    <path
+        android:pathData="M54,81m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0"
+        android:fillColor="#FFFFB400" />
 </vector>

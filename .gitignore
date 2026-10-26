@@ -57,3 +57,8 @@ app.*.map.json
 **/android/app/build/
 android/build/
 android/app/build/
+
+
+# Codebase bundles
+unified_smart_home_codebase.txt
+unified_smart_home_part*.txt

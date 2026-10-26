@@ -9,6 +9,7 @@ import '../../../providers/real_home_provider.dart';
 import '../../../services/auth/brand_oauth_catalog.dart';
 import '../../../services/real_iot_controller.dart';
 import 'camera_cockpit_sheet.dart';
+import 'universal_qr_scanner_sheet.dart';
 
 class BrandOAuthWebViewSheet extends StatefulWidget {
   final BrandAuthProviderConfig brand;
@@ -846,6 +847,57 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
             ),
           ),
           const Divider(height: 1, color: Colors.white12),
+
+          // Scan Brand QR Code Action Card (Available for EVERY supported provider)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: GestureDetector(
+              onTap: () {
+                Navigator.of(context).pop();
+                UniversalQrScannerSheet.show(context, initialProvider: widget.brand.id);
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      widget.brand.brandColor.withValues(alpha: 0.35),
+                      const Color(0xFF00D4FF).withValues(alpha: 0.20),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: widget.brand.brandColor.withValues(alpha: 0.60)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFF00D4FF), size: 22),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Scan ${widget.brand.brandName} QR Code',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 1),
+                          const Text(
+                            'Instant camera pairing via appliance barcode / Matter payload',
+                            style: TextStyle(color: Colors.white70, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white54, size: 14),
+                  ],
+                ),
+              ),
+            ),
+          ),
 
           if (_statusMessage != null)
             Container(
