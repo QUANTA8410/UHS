@@ -855,7 +855,7 @@ class RealHomeProvider extends ChangeNotifier {
   }
 
   // 8. updateWiproBulb
-  void updateWiproBulb(String id, {double? brightness, Color? color, int? colorTempKelvin, String? scene, bool? musicSync}) {
+  Future<void> updateWiproBulb(String id, {double? brightness, Color? color, int? colorTempKelvin, String? scene, bool? musicSync}) async {
     final idx = _devices.indexWhere((d) => d.id == id);
     if (idx == -1) return;
     final dev = _devices[idx];
@@ -871,7 +871,7 @@ class RealHomeProvider extends ChangeNotifier {
     if (colorTempKelvin != null) attrs['colorTempKelvin'] = colorTempKelvin;
     dev.liveAttributes = attrs;
     _controller.computeDeviceLiveWattage(dev);
-    _saveState();
+    await _saveState();
     notifyListeners();
 
     if (!_isHardwareExecutable(dev)) return;
@@ -922,7 +922,7 @@ class RealHomeProvider extends ChangeNotifier {
   }
 
   // 9. updateLgAc
-  void updateLgAc(String id, {double? targetTemp, String? fanSpeed, bool? jetCool}) {
+  Future<void> updateLgAc(String id, {double? targetTemp, String? fanSpeed, bool? jetCool}) async {
     final idx = _devices.indexWhere((d) => d.id == id);
     if (idx == -1) return;
     final dev = _devices[idx];
@@ -936,7 +936,7 @@ class RealHomeProvider extends ChangeNotifier {
     if (jetCool != null) attrs['jetCool'] = jetCool;
     dev.liveAttributes = attrs;
     _controller.computeDeviceLiveWattage(dev);
-    _saveState();
+    await _saveState();
     notifyListeners();
 
     if (!_isHardwareExecutable(dev)) return;

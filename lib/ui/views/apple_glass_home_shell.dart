@@ -2768,6 +2768,25 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
     _selectedSpinSpeed = widget.initialDevice.liveAttributes['spinSpeed']?.toString() != null
         ? '${widget.initialDevice.liveAttributes['spinSpeed']} RPM'
         : '1200 RPM';
+    final mode = widget.initialDevice.liveAttributes['mode']?.toString();
+    if (mode != null && mode.isNotEmpty) {
+      _acMode = mode[0].toUpperCase() + mode.substring(1);
+    }
+    final fan = widget.initialDevice.liveAttributes['fanSpeed']?.toString() ?? widget.initialDevice.liveAttributes['fan']?.toString();
+    if (fan != null && fan.isNotEmpty) {
+      _acFanSpeed = fan[0].toUpperCase() + fan.substring(1);
+    }
+    final k = widget.initialDevice.liveAttributes['colorTempKelvin'];
+    if (k != null) {
+      _lightKelvin = '${k}K';
+    }
+    final col = widget.initialDevice.liveAttributes['color'];
+    if (col != null) {
+      final parsed = int.tryParse(col.toString(), radix: 16);
+      if (parsed != null) {
+        _lightColor = Color(parsed.toUnsigned(32));
+      }
+    }
   }
 
   @override
@@ -3302,8 +3321,20 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
               ),
               onSelected: !isOnline
                   ? null
-                  : (sel) {
-                      if (sel) setState(() => _acMode = label);
+                  : (sel) async {
+                      if (sel) {
+                        setState(() => _acMode = label);
+                        device.liveAttributes = Map<String, dynamic>.from(device.liveAttributes)..['mode'] = modeKey;
+                        home.notifyUi();
+                        try {
+                          await home.executeDeviceCommand(
+                            device,
+                            'airConditionerMode',
+                            'setAirConditionerMode',
+                            [modeKey],
+                          );
+                        } catch (_) {}
+                      }
                     },
             );
           }).toList(),
@@ -3328,8 +3359,21 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
               ),
               onSelected: !isOnline
                   ? null
-                  : (sel) {
-                      if (sel) setState(() => _acFanSpeed = speed);
+                  : (sel) async {
+                      if (sel) {
+                        setState(() => _acFanSpeed = speed);
+                        device.liveAttributes = Map<String, dynamic>.from(device.liveAttributes)..['fanSpeed'] = speed;
+                        home.notifyUi();
+                        try {
+                          await home.updateLgAc(device.id, fanSpeed: speed);
+                          await home.executeDeviceCommand(
+                            device,
+                            'airConditionerFanMode',
+                            'setFanMode',
+                            [speed.toLowerCase()],
+                          );
+                        } catch (_) {}
+                      }
                     },
             );
           }).toList(),
@@ -3394,7 +3438,23 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
                 color: selected ? Colors.black : Colors.white70,
                 fontWeight: selected ? FontWeight.bold : FontWeight.normal,
               ),
-              onSelected: !isOnline ? null : (sel) => setState(() => _lightKelvin = kStr),
+              onSelected: !isOnline
+                  ? null
+                  : (sel) async {
+                      setState(() => _lightKelvin = kStr);
+                      device.liveAttributes = Map<String, dynamic>.from(device.liveAttributes)..['colorTempKelvin'] = kVal.round();
+                      await home.updateWiproBulb(device.id, colorTempKelvin: kVal.round());
+                      try {
+                        if (device.protocol == ConnectionProtocol.philipsHueLocal) {
+                          final ctMireds = (1000000 / kVal).round().clamp(153, 500);
+                          await home.executeDeviceCommand(device, 'colorTemperature', 'setCt', [ctMireds]);
+                        } else if (device.protocol == ConnectionProtocol.philipsWizUdp) {
+                          await home.executeDeviceCommand(device, 'colorTemperature', 'setTemp', [kVal.round()]);
+                        } else if (device.protocol == ConnectionProtocol.smartThingsCloud) {
+                          await home.executeDeviceCommand(device, 'colorTemperature', 'setColorTemperature', [kVal.round()]);
+                        }
+                      } catch (_) {}
+                    },
             );
           }).toList(),
         ),
@@ -3427,7 +3487,22 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
             children: IsometricHouse3DWidget.kHouseControlSwatches.map((c) {
               final isSel = _lightColor == c;
               return GestureDetector(
-                onTap: !isOnline ? null : () => setState(() => _lightColor = c),
+                onTap: !isOnline
+                    ? null
+                    : () async {
+                        setState(() => _lightColor = c);
+                        device.liveAttributes = Map<String, dynamic>.from(device.liveAttributes)..['color'] = c.value.toRadixString(16);
+                        await home.updateWiproBulb(device.id, color: c);
+                        try {
+                          if (device.protocol == ConnectionProtocol.philipsHueLocal) {
+                            await home.executeDeviceCommand(device, 'colorControl', 'setColor', [c]);
+                          } else if (device.protocol == ConnectionProtocol.philipsWizUdp) {
+                            await home.executeDeviceCommand(device, 'colorControl', 'setRgb', [c.red, c.green, c.blue]);
+                          } else if (device.protocol == ConnectionProtocol.smartThingsCloud) {
+                            await home.executeDeviceCommand(device, 'colorControl', 'setColor', [{'hex': c.value.toRadixString(16)}]);
+                          }
+                        } catch (_) {}
+                      },
                 child: Container(
                   margin: const EdgeInsets.only(right: 12),
                   width: 32,
