@@ -7,6 +7,7 @@ import '../../services/auth/brand_oauth_catalog.dart';
 import '../../services/automation/smart_automation_engine.dart';
 import '../../services/notifications/appliance_notification_bridge.dart';
 import '../../services/real_iot_controller.dart';
+import '../../services/tv/oneplus_connect_service.dart';
 import '../../theme/apple_glass_theme.dart';
 import '../widgets/animations/universal_device_animations.dart';
 import '../widgets/dialogs/brand_oauth_webview_sheet.dart';
@@ -2705,10 +2706,10 @@ void showDeviceControlSheet(BuildContext context, RealSmartDevice device) {
     return;
   }
 
-  // 7. Televisions & The Frame Art Mode
-  if (archetype == UniversalDeviceArchetype.tvMedia ||
-      cat == 'tv' ||
-      devId.contains('the_frame') ||
+  // 7. Televisions & The Frame Art Mode (Samsung & The Frame Only)
+  if (devId.contains('samsung') ||
+      devName.contains('samsung') ||
+      devId.contains('frame') ||
       devName.contains('frame')) {
     showModalBottomSheet(
       context: context,
@@ -2735,8 +2736,13 @@ void showDeviceControlSheet(BuildContext context, RealSmartDevice device) {
 
 class AppleGlassDeviceControlSheet extends StatefulWidget {
   final RealSmartDevice initialDevice;
+  final OnePlusConnectService? tvService;
 
-  const AppleGlassDeviceControlSheet({super.key, required this.initialDevice});
+  const AppleGlassDeviceControlSheet({
+    super.key,
+    required this.initialDevice,
+    this.tvService,
+  });
 
   @override
   State<AppleGlassDeviceControlSheet> createState() => _AppleGlassDeviceControlSheetState();
@@ -2745,6 +2751,7 @@ class AppleGlassDeviceControlSheet extends StatefulWidget {
 typedef _AppleGlassDeviceControlSheet = AppleGlassDeviceControlSheet;
 
 class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSheet> {
+  OnePlusConnectService get _tvService => widget.tvService ?? OnePlusConnectService();
   bool _isRefreshing = false;
   String? _selectedWaterTemp;
   String? _selectedSpinSpeed;
@@ -2953,7 +2960,7 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
                 _buildAcClimateControls(context, home, device, isOnline, isOn)
               else if (device.category == 'light')
                 _buildSmartLightControls(context, home, device, isOnline, isOn)
-              else if (device.category == 'tv')
+              else if (device.category == 'tv' || archetype == UniversalDeviceArchetype.tvMedia)
                 _buildOnePlusTvControls(context, home, device, isOnline, isOn)
               else if (device.category == 'camera')
                 _buildCameraControls(context, home, device, isOnline, isOn)
@@ -3452,6 +3459,8 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
     bool isOnline,
     bool isOn,
   ) {
+    final ip = device.credentials['ip'];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3462,14 +3471,24 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
             children: [
               IconButton(
                 icon: const Icon(Icons.arrow_drop_up_rounded, size: 36, color: Colors.white),
-                onPressed: !isOnline ? null : () => HapticFeedback.selectionClick(),
+                onPressed: !isOnline
+                    ? null
+                    : () {
+                        HapticFeedback.selectionClick();
+                        _tvService.sendRemoteKey(tvId: device.id, keyAction: 'DPAD_UP', host: ip);
+                      },
               ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   IconButton(
                     icon: const Icon(Icons.arrow_left_rounded, size: 36, color: Colors.white),
-                    onPressed: !isOnline ? null : () => HapticFeedback.selectionClick(),
+                    onPressed: !isOnline
+                        ? null
+                        : () {
+                            HapticFeedback.selectionClick();
+                            _tvService.sendRemoteKey(tvId: device.id, keyAction: 'DPAD_LEFT', host: ip);
+                          },
                   ),
                   Container(
                     width: 58,
@@ -3481,18 +3500,33 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
                     ),
                     child: IconButton(
                       icon: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-                      onPressed: !isOnline ? null : () => HapticFeedback.mediumImpact(),
+                      onPressed: !isOnline
+                          ? null
+                          : () {
+                              HapticFeedback.mediumImpact();
+                              _tvService.sendRemoteKey(tvId: device.id, keyAction: 'ENTER', host: ip);
+                            },
                     ),
                   ),
                   IconButton(
                     icon: const Icon(Icons.arrow_right_rounded, size: 36, color: Colors.white),
-                    onPressed: !isOnline ? null : () => HapticFeedback.selectionClick(),
+                    onPressed: !isOnline
+                        ? null
+                        : () {
+                            HapticFeedback.selectionClick();
+                            _tvService.sendRemoteKey(tvId: device.id, keyAction: 'DPAD_RIGHT', host: ip);
+                          },
                   ),
                 ],
               ),
               IconButton(
                 icon: const Icon(Icons.arrow_drop_down_rounded, size: 36, color: Colors.white),
-                onPressed: !isOnline ? null : () => HapticFeedback.selectionClick(),
+                onPressed: !isOnline
+                    ? null
+                    : () {
+                        HapticFeedback.selectionClick();
+                        _tvService.sendRemoteKey(tvId: device.id, keyAction: 'DPAD_DOWN', host: ip);
+                      },
               ),
             ],
           ),
@@ -3505,14 +3539,24 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
               style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white24)),
               icon: const Icon(Icons.arrow_back_rounded, size: 16),
               label: const Text('Back'),
-              onPressed: !isOnline ? null : () => HapticFeedback.lightImpact(),
+              onPressed: !isOnline
+                  ? null
+                  : () {
+                      HapticFeedback.lightImpact();
+                      _tvService.sendRemoteKey(tvId: device.id, keyAction: 'BACK', host: ip);
+                    },
             ),
             const SizedBox(width: 14),
             OutlinedButton.icon(
               style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white24)),
               icon: const Icon(Icons.home_rounded, size: 16),
               label: const Text('Home'),
-              onPressed: !isOnline ? null : () => HapticFeedback.lightImpact(),
+              onPressed: !isOnline
+                  ? null
+                  : () {
+                      HapticFeedback.lightImpact();
+                      _tvService.sendRemoteKey(tvId: device.id, keyAction: 'HOME', host: ip);
+                    },
             ),
           ],
         ),
@@ -3533,6 +3577,7 @@ class _AppleGlassDeviceControlSheetState extends State<AppleGlassDeviceControlSh
                   : () {
                       HapticFeedback.mediumImpact();
                       setState(() => _actionStatus = 'Launching $app on ${device.name}...');
+                      _tvService.launchApp(tvId: device.id, appName: app, host: ip);
                     },
             );
           }).toList(),
