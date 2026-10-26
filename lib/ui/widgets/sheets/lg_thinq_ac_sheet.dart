@@ -66,6 +66,14 @@ class _LgThinqAcSheetState extends State<LgThinqAcSheet>
     _syncFromDeviceAttributes();
   }
 
+  @override
+  void didUpdateWidget(covariant LgThinqAcSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_debounceTimer?.isActive != true) {
+      _syncFromDeviceAttributes();
+    }
+  }
+
   void _syncFromDeviceAttributes() {
     final attrs = widget.device.liveAttributes;
     _isOn = widget.device.isOn;
@@ -123,7 +131,8 @@ class _LgThinqAcSheetState extends State<LgThinqAcSheet>
 
   void _dispatchDebouncedCommand() {
     _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 350), () {
+    _debounceTimer = Timer(const Duration(milliseconds: 350), () async {
+      if (!mounted) return;
       final home = context.read<RealHomeProvider>();
 
       // Build LG ThinQ / Tuya compliant telemetry state
@@ -142,9 +151,8 @@ class _LgThinqAcSheetState extends State<LgThinqAcSheet>
         ..['autoDry'] = _autoDry
         ..['remainTimeMinute'] = _sleepTimerMinutes;
 
-      // Update in RealHomeProvider
+      // Update in RealHomeProvider without corrupting isOn
       widget.device.liveAttributes.addAll(updatedAttrs);
-      widget.device.isOn = _isOn;
 
       home.updateLgAc(
         widget.device.id,
@@ -153,6 +161,17 @@ class _LgThinqAcSheetState extends State<LgThinqAcSheet>
         jetCool: _opMode == 'jet',
       );
       home.notifyUi();
+
+      try {
+        await home.setDeviceLevel(widget.device, _targetTemp);
+        await home.zeroTouch.controlLgAirConditioner(
+          device: widget.device,
+          powerOn: _isOn,
+          targetCelsius: _targetTemp,
+          jetCoolMode: _opMode == 'jet',
+          patTokenOverride: home.linkedLgThinqPat,
+        );
+      } catch (_) {}
 
       widget.onStateChanged?.call();
     });
@@ -167,12 +186,24 @@ class _LgThinqAcSheetState extends State<LgThinqAcSheet>
     _dispatchDebouncedCommand();
   }
 
-  void _togglePower() {
+  Future<void> _togglePower() async {
     HapticFeedback.mediumImpact();
-    setState(() {
-      _isOn = !_isOn;
-    });
-    _dispatchDebouncedCommand();
+    final home = context.read<RealHomeProvider>();
+    try {
+      await home.toggleDevicePower(widget.device);
+      if (mounted) {
+        setState(() {
+          _isOn = widget.device.isOn;
+        });
+        widget.onStateChanged?.call();
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isOn = widget.device.isOn;
+        });
+      }
+    }
   }
 
   void _selectMode(String mode) {
