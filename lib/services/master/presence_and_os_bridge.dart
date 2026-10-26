@@ -27,6 +27,26 @@ class PresenceAndOsBridge {
   // ---------------------------------------------------------------------------
   // PILLAR 4: WI-FI BSSID ZERO-GPS HOME/AWAY GEOFENCING
   // ---------------------------------------------------------------------------
+  /// Checks whether runtime location permission (required on Android for BSSID access) is granted
+  Future<bool> hasLocationPermission() async {
+    try {
+      final res = await _osChannel.invokeMethod<bool>('hasLocationPermission');
+      return res ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Requests ACCESS_FINE_LOCATION and ACCESS_COARSE_LOCATION permissions (Bug 11)
+  Future<bool> requestLocationPermission() async {
+    try {
+      final res = await _osChannel.invokeMethod<bool>('requestLocationPermission');
+      return res ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
   Future<String?> getCurrentRouterBssid() async {
     try {
       return await _networkInfo.getWifiBSSID();

@@ -59,6 +59,33 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(true)
                 }
+                "requestLocationPermission" -> {
+                    val perms = mutableListOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        perms.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+                    }
+                    val missing = perms.filter {
+                        ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+                    }
+                    if (missing.isNotEmpty()) {
+                        ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1003)
+                    }
+                    result.success(true)
+                }
+                "hasLocationPermission" -> {
+                    val hasFine = ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    val hasCoarse = ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    result.success(hasFine || hasCoarse)
+                }
                 "triggerApplianceAlert" -> {
                     val title = call.argument<String>("title") ?: "🧺 Appliance Alert"
                     val body = call.argument<String>("body") ?: "Cycle completed!"
@@ -266,6 +293,33 @@ class MainActivity : FlutterActivity() {
                     val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                     manager.cancel(9001)
                     result.success(true)
+                }
+                "requestLocationPermission" -> {
+                    val perms = mutableListOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        perms.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+                    }
+                    val missing = perms.filter {
+                        ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+                    }
+                    if (missing.isNotEmpty()) {
+                        ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1003)
+                    }
+                    result.success(true)
+                }
+                "hasLocationPermission" -> {
+                    val hasFine = ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    val hasCoarse = ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    result.success(hasFine || hasCoarse)
                 }
                 else -> result.notImplemented()
             }
