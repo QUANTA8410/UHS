@@ -1910,9 +1910,14 @@ class RealHomeProvider extends ChangeNotifier {
 
   Future<void> setDeviceLevel(RealSmartDevice device, double newValue) async {
     lastGlobalError = null;
+    final previousLevel = device.primaryValue;
+    final previousIsOn = device.isOn;
+
     // Optimistic instant slider response for smooth 60/120fps tracking
     device.primaryValue = newValue;
-    device.isOn = newValue > 0;
+    if (device.normalizedCategory == 'light' || device.category == 'light') {
+      device.isOn = newValue > 0;
+    }
     _controller.computeDeviceLiveWattage(device);
     notifyListeners();
 
@@ -1931,6 +1936,9 @@ class RealHomeProvider extends ChangeNotifier {
         device.markOnlineSuccess();
         await _saveState();
       } catch (e) {
+        device.primaryValue = previousLevel;
+        device.isOn = previousIsOn;
+        _controller.computeDeviceLiveWattage(device);
         lastGlobalError = e.toString().replaceAll('Exception: ', '');
       } finally {
         notifyListeners();
