@@ -2002,22 +2002,144 @@ class RealHomeProvider extends ChangeNotifier {
     });
   }
 
-  // NFC & Deep-Link Execution Handler:
+  // NFC & Deep-Link Execution Handler (Quick Controls & OAuth Linking):
   Future<void> handleNfcOrDeepLink(String uri) async {
-    // Format: unifiedhome://toggle/<deviceId> or unifiedhome://all_off
-    if (uri.contains('all_off')) {
+    final raw = uri.trim();
+    if (raw.isEmpty) return;
+
+    // 1. NFC / Quick Controls: unifiedhome://toggle/<deviceId> or unifiedhome://all_off
+    if (raw.contains('all_off')) {
       for (final d in _devices.where((d) => d.isOn)) {
         try {
           await toggleDevicePower(d);
         } catch (_) {}
       }
-    } else if (uri.contains('toggle/')) {
-      final id = uri.split('toggle/').last.trim();
+      return;
+    } else if (raw.contains('toggle/')) {
+      final id = raw.split('toggle/').last.trim();
       final match = _devices.where((d) => d.id == id).toList();
       if (match.isNotEmpty) {
         await toggleDevicePower(match.first);
       }
+      return;
     }
+
+    // 2. OAuth Deep-Link Callbacks & Camera Streams:
+    final parsed = Uri.tryParse(raw);
+    if (parsed == null || parsed.scheme.toLowerCase() != 'unifiedhome') return;
+
+    final host = parsed.host.toLowerCase();
+    final pathSegments = parsed.pathSegments.map((s) => s.toLowerCase()).toList();
+
+    // Extract token / code
+    final token = parsed.queryParameters['token'] ??
+        parsed.queryParameters['access_token'] ??
+        parsed.queryParameters['code'] ??
+        parsed.queryParameters['pat'];
+
+    // Identify target brand
+    String? target;
+    if (host == 'oauth' && pathSegments.isNotEmpty) {
+      target = pathSegments.first;
+    } else if (host == 'oauth-callback') {
+      target = parsed.queryParameters['brand']?.toLowerCase() ??
+          (pathSegments.isNotEmpty ? pathSegments.first : null);
+    } else if (host == 'camera') {
+      target = pathSegments.isNotEmpty ? pathSegments.first : 'realme';
+    }
+
+    if (host == 'camera' || target == 'camera') {
+      final brand = pathSegments.isNotEmpty ? pathSegments.first : 'realme';
+      final ip = parsed.queryParameters['ip'] ?? '';
+      if (ip.isNotEmpty) {
+        final port = parsed.queryParameters['port'] ?? '554';
+        final user = parsed.queryParameters['user'] ?? parsed.queryParameters['username'] ?? 'admin';
+        final pass = parsed.queryParameters['pass'] ?? parsed.queryParameters['password'] ?? '';
+        final room = parsed.queryParameters['room'] ?? 'Living Room';
+        final customName = parsed.queryParameters['name'] ?? parsed.queryParameters['customName'];
+        final streamPath = parsed.queryParameters['path'] ?? parsed.queryParameters['streamPath'] ?? '';
+        try {
+          await linkRtspCamera(
+            brand: brand,
+            ip: ip,
+            port: port,
+            username: user,
+            password: pass,
+            customStreamPath: streamPath,
+            room: room,
+            customName: customName,
+          );
+        } catch (_) {}
+      }
+      return;
+    }
+
+    if (token == null || token.trim().isEmpty) return;
+    final cleanToken = token.trim();
+
+    try {
+      switch (target) {
+        case 'smartthings':
+        case 'samsung':
+          await linkSmartThingsAccount(cleanToken);
+          break;
+        case 'lgthinq':
+        case 'lg_thinq':
+        case 'lg':
+          await linkLgThinqAccount(cleanToken);
+          break;
+        case 'ha':
+        case 'homeassistant':
+        case 'home_assistant':
+          final hubUrl = parsed.queryParameters['hub_url'] ??
+              linkedHomeAssistantHubUrl ??
+              'http://homeassistant.local:8123';
+          await linkHomeAssistantHub(hubUrl, cleanToken);
+          break;
+        case 'tuya':
+        case 'wipro':
+          final accessId = parsed.queryParameters['client_id'] ?? parsed.queryParameters['access_id'];
+          final accessSecret = parsed.queryParameters['client_secret'] ?? parsed.queryParameters['access_secret'];
+          final user = parsed.queryParameters['username'] ??
+              parsed.queryParameters['user'] ??
+              parsed.queryParameters['client'] ??
+              'wipro_user';
+          final pass = parsed.queryParameters['password'] ??
+              parsed.queryParameters['pass'] ??
+              cleanToken;
+          if (accessId != null && accessSecret != null) {
+            final sampleDevId = parsed.queryParameters['dev_id'] ??
+                parsed.queryParameters['devId'] ??
+                parsed.queryParameters['device_id'] ??
+                cleanToken;
+            await autoHarvestWiproKeys(
+              accessId: accessId,
+              accessSecret: accessSecret,
+              sampleDeviceId: sampleDevId,
+            );
+          } else {
+            await linkWiproSmartLifeAccount(
+              username: user,
+              password: pass,
+            );
+          }
+          break;
+        case 'hue':
+        case 'philips_hue':
+          final bridgeIp = parsed.queryParameters['bridge_ip'] ??
+              parsed.queryParameters['ip'] ??
+              '192.168.1.55';
+          await linkPhilipsHueBridge(bridgeIp: bridgeIp, username: cleanToken);
+          break;
+        default:
+          if (cleanToken.startsWith('st_') || cleanToken.length == 36) {
+            await linkSmartThingsAccount(cleanToken);
+          } else {
+            await linkLgThinqAccount(cleanToken);
+          }
+          break;
+      }
+    } catch (_) {}
   }
 
   Future<void> lockCurrentBssidAsHome() async {

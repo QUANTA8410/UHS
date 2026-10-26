@@ -48,6 +48,9 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
   final TextEditingController _camNameCtrl = TextEditingController();
   final TextEditingController _camRoomCtrl = TextEditingController(text: 'Living Room');
 
+  // Home Assistant controller
+  final TextEditingController _haHubUrlCtrl = TextEditingController(text: 'http://homeassistant.local:8123');
+
   bool _waitingForRealmeReturn = false;
   bool _waitingForPhilipsReturn = false;
   bool _isScanningCamera = false;
@@ -109,6 +112,7 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
     _camPassCtrl.dispose();
     _camNameCtrl.dispose();
     _camRoomCtrl.dispose();
+    _haHubUrlCtrl.dispose();
     super.dispose();
   }
 
@@ -348,16 +352,23 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
     try {
       int importedCount = 0;
       if (widget.brand.vendorType == 'lg_thinq') {
-        final lgDevices = await home.zeroTouch.discoverLgThinqDevices(patToken: cleanToken);
-        for (final d in lgDevices) {
-          await home.addDirectLanDevice(d);
-        }
-        importedCount = lgDevices.length;
+        importedCount = await home.linkLgThinqAccount(cleanToken);
       } else if (widget.brand.vendorType == 'smartthings') {
         importedCount = await home.linkSmartThingsAccount(cleanToken);
       } else if (widget.brand.vendorType == 'home_assistant') {
+        final hubUrl = _haHubUrlCtrl.text.trim().isNotEmpty
+            ? _haHubUrlCtrl.text.trim()
+            : (home.linkedHomeAssistantHubUrl ?? 'http://homeassistant.local:8123');
         importedCount = await home.linkHomeAssistantHub(
-          'http://homeassistant.local:8123',
+          hubUrl,
+          cleanToken,
+        );
+      } else if (widget.brand.vendorType == 'tplink_tapo') {
+        final hubUrl = _haHubUrlCtrl.text.trim().isNotEmpty
+            ? _haHubUrlCtrl.text.trim()
+            : (home.linkedHomeAssistantHubUrl ?? 'http://homeassistant.local:8123');
+        importedCount = await home.linkHomeAssistantHub(
+          hubUrl,
           cleanToken,
         );
       } else {
@@ -1320,6 +1331,33 @@ class _BrandOAuthWebViewSheetState extends State<BrandOAuthWebViewSheet>
             ),
           ),
           const SizedBox(height: 20),
+          if (widget.brand.vendorType == 'home_assistant') ...[
+            const Text(
+              'Home Assistant Hub URL / IP Address:',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.white70,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _haHubUrlCtrl,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'http://homeassistant.local:8123 or http://192.168.1.x:8123',
+                hintStyle: const TextStyle(color: Colors.white38),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.07),
+                prefixIcon: const Icon(Icons.dns_rounded, color: Color(0xFF03A9F4), size: 18),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
           const Text(
             'Or Paste / Verify Your Token Directly:',
             style: TextStyle(

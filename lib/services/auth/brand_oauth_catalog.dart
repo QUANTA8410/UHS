@@ -109,7 +109,7 @@ class BrandOAuthCatalog {
       icon: Icons.power_rounded,
       loginUrl: 'https://www.tapo.com/en/login/',
       redirectUriPrefix: 'unifiedhome://oauth/tapo',
-      vendorType: 'smartthings',
+      vendorType: 'tplink_tapo',
     ),
     BrandAuthProviderConfig(
       id: 'home_assistant',
