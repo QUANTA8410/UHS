@@ -526,22 +526,65 @@ extension _ListChunk<T> on List<T> {
 /// Hybrid Wipro / Tuya Direct Local Encrypted Frame & Cloud Service.
 class WiproTuyaService {
   final TuyaService cloud = TuyaService();
+  final Future<Socket> Function(dynamic host, int port, {Duration? timeout})? socketConnector;
+  final Map<String, Future<void>> _hostLocks = {};
+
+  WiproTuyaService({this.socketConnector});
+
+  Future<Socket> _socketConnect(dynamic host, int port, {Duration? timeout}) {
+    final sc = socketConnector;
+    return sc != null
+        ? sc(host, port, timeout: timeout)
+        : Socket.connect(host, port, timeout: timeout);
+  }
+
+  /// Serializes socket connections on port 6668 per host to prevent
+  /// socket contention on single-connection ESP8266/BK7231 microcontrollers (Bug 9).
+  Future<T> _withHostLock<T>(String host, Future<T> Function() action) {
+    final previous = _hostLocks[host] ?? Future.value();
+    final completer = Completer<void>();
+    _hostLocks[host] = completer.future;
+
+    return previous.then((_) async {
+      try {
+        return await action();
+      } finally {
+        await Future.delayed(const Duration(milliseconds: 100));
+        completer.complete();
+        if (_hostLocks[host] == completer.future) {
+          _hostLocks.remove(host);
+        }
+      }
+    }, onError: (_) async {
+      try {
+        return await action();
+      } finally {
+        await Future.delayed(const Duration(milliseconds: 100));
+        completer.complete();
+        if (_hostLocks[host] == completer.future) {
+          _hostLocks.remove(host);
+        }
+      }
+    });
+  }
 
   /// Test whether Wipro bulb is reachable at the given LAN IP address
   Future<bool> checkConnectivity(String host, {Duration timeout = const Duration(seconds: 2)}) async {
     if (host.isEmpty) return false;
-    try {
-      final socket = await Socket.connect(host, 6668, timeout: timeout);
-      socket.destroy();
-      return true;
-    } catch (_) {
+    return _withHostLock(host, () async {
       try {
-        final socket = await Socket.connect(host, 80, timeout: timeout);
-        socket.destroy();
+        final socket = await _socketConnect(host, 6668, timeout: timeout);
+        await socket.close();
         return true;
-      } catch (_) {}
-    }
-    return false;
+      } catch (_) {
+        try {
+          final socket = await _socketConnect(host, 80, timeout: timeout);
+          await socket.close();
+          return true;
+        } catch (_) {}
+      }
+      return false;
+    });
   }
 
   /// Sends raw Tuya 3.3 / 3.4 LAN DPS payload to the Wipro bulb over TCP port 6668
@@ -550,6 +593,7 @@ class WiproTuyaService {
     required Map<String, dynamic> dps,
     String? localKey,
     String? deviceId,
+    String version = '3.3',
   }) async {
     if (host.isEmpty) return true;
 
@@ -560,26 +604,29 @@ class WiproTuyaService {
         deviceId: deviceId ?? 'wipro_bulb',
         localKey: localKey,
         dps: dps,
+        version: version,
       );
     }
 
-    try {
-      final socket = await Socket.connect(host, 6668, timeout: const Duration(seconds: 1));
-      final payload = jsonEncode({
-        'gwId': deviceId ?? 'wipro_bulb',
-        'devId': deviceId ?? 'wipro_bulb',
-        'uid': 'wipro_user',
-        't': '${DateTime.now().millisecondsSinceEpoch ~/ 1000}',
-        'dps': dps,
-      });
+    return _withHostLock(host, () async {
+      try {
+        final socket = await _socketConnect(host, 6668, timeout: const Duration(seconds: 1));
+        final payload = jsonEncode({
+          'gwId': deviceId ?? 'wipro_bulb',
+          'devId': deviceId ?? 'wipro_bulb',
+          'uid': 'wipro_user',
+          't': '${DateTime.now().millisecondsSinceEpoch ~/ 1000}',
+          'dps': dps,
+        });
 
-      socket.write(payload);
-      await socket.flush();
-      socket.destroy();
-      return true;
-    } catch (_) {
-      return false;
-    }
+        socket.write(payload);
+        await socket.flush();
+        await socket.close();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    });
   }
 
   /// Direct Tuya / Smart Life local encrypted frame transmission (v3.3 AES-128-ECB PKCS7 + CRC32)
@@ -588,63 +635,75 @@ class WiproTuyaService {
     required String deviceId,
     required String localKey,
     required Map<String, dynamic> dps,
+    String version = '3.3',
   }) async {
     if (host.isEmpty || localKey.length != 16) return false;
 
-    try {
-      final socket = await Socket.connect(host, 6668, timeout: const Duration(seconds: 3));
+    return _withHostLock(host, () async {
       try {
-        final payload = jsonEncode({
-          'gwId': deviceId,
-          'devId': deviceId,
-          'uid': deviceId,
-          't': (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString(),
-          'dps': dps,
-        });
+        final socket = await _socketConnect(host, 6668, timeout: const Duration(seconds: 3));
+        try {
+          final payload = jsonEncode({
+            'gwId': deviceId,
+            'devId': deviceId,
+            'uid': deviceId,
+            't': (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString(),
+            'dps': dps,
+          });
 
-        final key = enc.Key.fromUtf8(localKey);
-        final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.ecb, padding: 'PKCS7'));
-        final encrypted = encrypter.encrypt(payload).bytes;
+          final key = enc.Key.fromUtf8(localKey);
+          final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.ecb, padding: 'PKCS7'));
+          final encrypted = encrypter.encrypt(payload).bytes;
 
-        final body = BytesBuilder()
-          ..add(utf8.encode('3.3\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'))
-          ..add(encrypted);
-        final bodyBytes = body.toBytes();
-
-        final header = ByteData(16)
-          ..setUint32(0, 0x000055AA, Endian.big)
-          ..setUint32(4, 1, Endian.big)
-          ..setUint32(8, 7, Endian.big) // 7 = CONTROL
-          ..setUint32(12, bodyBytes.length + 8, Endian.big);
-
-        final frame = BytesBuilder()
-          ..add(header.buffer.asUint8List())
-          ..add(bodyBytes);
-
-        // IEEE 802.3 CRC32
-        int crc = 0xFFFFFFFF;
-        for (final b in frame.toBytes()) {
-          crc ^= b;
-          for (int i = 0; i < 8; i++) {
-            crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+          final body = BytesBuilder();
+          if (version == '3.1') {
+            body.add(encrypted);
+          } else {
+            final versionBytes = utf8.encode(version);
+            final padLength = (15 - versionBytes.length).clamp(0, 15);
+            body.add(versionBytes);
+            if (padLength > 0) {
+              body.add(Uint8List(padLength));
+            }
+            body.add(encrypted);
           }
+          final bodyBytes = body.toBytes();
+
+          final header = ByteData(16)
+            ..setUint32(0, 0x000055AA, Endian.big)
+            ..setUint32(4, 1, Endian.big)
+            ..setUint32(8, 7, Endian.big) // 7 = CONTROL
+            ..setUint32(12, bodyBytes.length + 8, Endian.big);
+
+          final frame = BytesBuilder()
+            ..add(header.buffer.asUint8List())
+            ..add(bodyBytes);
+
+          // IEEE 802.3 CRC32
+          int crc = 0xFFFFFFFF;
+          for (final b in frame.toBytes()) {
+            crc ^= b;
+            for (int i = 0; i < 8; i++) {
+              crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+            }
+          }
+          crc ^= 0xFFFFFFFF;
+
+          final footer = ByteData(8)
+            ..setUint32(0, crc, Endian.big)
+            ..setUint32(4, 0x0000AA55, Endian.big);
+          frame.add(footer.buffer.asUint8List());
+
+          socket.add(frame.toBytes());
+          await socket.flush();
+          return true;
+        } finally {
+          await socket.close();
         }
-        crc ^= 0xFFFFFFFF;
-
-        final footer = ByteData(8)
-          ..setUint32(0, crc, Endian.big)
-          ..setUint32(4, 0x0000AA55, Endian.big);
-        frame.add(footer.buffer.asUint8List());
-
-        socket.add(frame.toBytes());
-        await socket.flush();
-        return true;
-      } finally {
-        await socket.close();
+      } catch (_) {
+        return false;
       }
-    } catch (_) {
-      return false;
-    }
+    });
   }
 
   /// Power toggle (DPS 20: boolean)
@@ -653,12 +712,14 @@ class WiproTuyaService {
     required bool isPowered,
     String? cloudDeviceId,
     String? localKey,
+    String version = '3.3',
   }) async {
     return sendLocalCommand(
       host: host,
       dps: {'20': isPowered},
       localKey: localKey,
       deviceId: cloudDeviceId,
+      version: version,
     );
   }
 
@@ -668,6 +729,7 @@ class WiproTuyaService {
     required double brightness,
     String? cloudDeviceId,
     String? localKey,
+    String version = '3.3',
   }) async {
     final tuyaVal = (brightness * 1000).clamp(10, 1000).round();
     return sendLocalCommand(
@@ -675,6 +737,7 @@ class WiproTuyaService {
       dps: {'22': tuyaVal},
       localKey: localKey,
       deviceId: cloudDeviceId,
+      version: version,
     );
   }
 
@@ -684,6 +747,7 @@ class WiproTuyaService {
     required int kelvin,
     String? cloudDeviceId,
     String? localKey,
+    String version = '3.3',
   }) async {
     final percent = ((kelvin - 2700) / (6500 - 2700)).clamp(0.0, 1.0);
     final tuyaVal = (percent * 1000).round();
@@ -692,6 +756,7 @@ class WiproTuyaService {
       dps: {'23': tuyaVal},
       localKey: localKey,
       deviceId: cloudDeviceId,
+      version: version,
     );
   }
 
@@ -701,12 +766,14 @@ class WiproTuyaService {
     required String hexRgb,
     String? cloudDeviceId,
     String? localKey,
+    String version = '3.3',
   }) async {
     return sendLocalCommand(
       host: host,
       dps: {'24': hexRgb, '21': 'colour'},
       localKey: localKey,
       deviceId: cloudDeviceId,
+      version: version,
     );
   }
 

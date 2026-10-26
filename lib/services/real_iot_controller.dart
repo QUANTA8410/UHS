@@ -414,8 +414,47 @@ class RealSmartDevice {
 class RealIotController {
   static const String _stBase = 'https://api.smartthings.com/v1';
   final http.Client? client;
+  final Future<Socket> Function(dynamic host, int port, {Duration? timeout})? socketConnector;
+  final Map<String, Future<void>> _tuyaLanLocks = {};
 
-  RealIotController({this.client});
+  RealIotController({this.client, this.socketConnector});
+
+  /// Serializes socket connections on port 6668 per device IP to prevent
+  /// socket contention on single-connection ESP8266/BK7231 microcontrollers (Bug 9).
+  Future<T> _withTuyaLanLock<T>(String key, Future<T> Function() action) {
+    final previous = _tuyaLanLocks[key] ?? Future.value();
+    final completer = Completer<void>();
+    _tuyaLanLocks[key] = completer.future;
+
+    return previous.then((_) async {
+      try {
+        return await action();
+      } finally {
+        await Future.delayed(const Duration(milliseconds: 100));
+        completer.complete();
+        if (_tuyaLanLocks[key] == completer.future) {
+          _tuyaLanLocks.remove(key);
+        }
+      }
+    }, onError: (_) async {
+      try {
+        return await action();
+      } finally {
+        await Future.delayed(const Duration(milliseconds: 100));
+        completer.complete();
+        if (_tuyaLanLocks[key] == completer.future) {
+          _tuyaLanLocks.remove(key);
+        }
+      }
+    });
+  }
+
+  Future<Socket> _socketConnect(dynamic host, int port, {Duration? timeout}) {
+    final sc = socketConnector;
+    return sc != null
+        ? sc(host, port, timeout: timeout)
+        : Socket.connect(host, port, timeout: timeout);
+  }
 
   Future<http.Response> _get(Uri url, {Map<String, String>? headers}) {
     final c = client;
@@ -1234,14 +1273,31 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.tuyaLocalLan:
+        final ip = _requireCredential(device, 'ip');
+        final port = int.tryParse(device.credentials['port'] ?? '6668') ?? 6668;
+
+        // Optimization (Bug 9): If device successfully responded within the last 15s,
+        // it is demonstrably online. Skip probing port 6668 to avoid unnecessary contention.
+        final lastSuccess = device.lastPolledAt;
+        if (lastSuccess != null && DateTime.now().difference(lastSuccess).inSeconds < 15) {
+          device.markOnlineSuccess();
+          break;
+        }
+
+        await _withTuyaLanLock(ip, () async {
+          final socket = await _socketConnect(ip, port, timeout: const Duration(seconds: 3));
+          try {
+            device.markOnlineSuccess();
+          } finally {
+            await socket.close();
+          }
+        });
+        break;
+
       case ConnectionProtocol.onePlusTvLan:
         final ip = _requireCredential(device, 'ip');
-        final port = int.tryParse(
-              device.credentials['port'] ??
-                  (device.protocol == ConnectionProtocol.tuyaLocalLan ? '6668' : '8008'),
-            ) ??
-            8008;
-        final socket = await Socket.connect(ip, port, timeout: const Duration(seconds: 3));
+        final port = int.tryParse(device.credentials['port'] ?? '8008') ?? 8008;
+        final socket = await _socketConnect(ip, port, timeout: const Duration(seconds: 3));
         try {
           device.isOnline = true;
         } finally {
@@ -1832,7 +1888,8 @@ class RealIotController {
         if (localKey.length != 16) {
           throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
         }
-        await _sendTuyaEncryptedFrame(ip, devId, localKey, {'20': turnOn});
+        final version = device.credentials['version'] ?? '3.3';
+        await _sendTuyaEncryptedFrame(ip, devId, localKey, {'20': turnOn}, version: version);
         device.isOn = turnOn;
         break;
 
@@ -2340,12 +2397,14 @@ class RealIotController {
         if (localKey.length != 16) {
           throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
         }
+        final version = device.credentials['version'] ?? '3.3';
         // Tuya DPS 22 is brightness (10 to 1000)
         await _sendTuyaEncryptedFrame(
           ip,
           device.id,
           localKey,
           {'20': true, '22': (value * 10).round().clamp(10, 1000)},
+          version: version,
         );
         device.primaryValue = value;
         break;
@@ -2470,63 +2529,76 @@ class RealIotController {
     if (localKey.length != 16) {
       throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
     }
-    await _sendTuyaEncryptedFrame(ip, device.id, localKey, dpsMap);
+    final version = device.credentials['version'] ?? '3.3';
+    await _sendTuyaEncryptedFrame(ip, device.id, localKey, dpsMap, version: version);
   }
 
   Future<void> _sendTuyaEncryptedFrame(
     String ip,
     String deviceId,
     String localKey,
-    Map<String, dynamic> dps,
-  ) async {
-    final socket = await Socket.connect(ip, 6668, timeout: const Duration(seconds: 4));
-    try {
-      final payload = jsonEncode({
-        'gwId': deviceId,
-        'devId': deviceId,
-        'uid': deviceId,
-        't': (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString(),
-        'dps': dps,
-      });
+    Map<String, dynamic> dps, {
+    String version = '3.3',
+  }) async {
+    await _withTuyaLanLock(ip, () async {
+      final socket = await _socketConnect(ip, 6668, timeout: const Duration(seconds: 4));
+      try {
+        final payload = jsonEncode({
+          'gwId': deviceId,
+          'devId': deviceId,
+          'uid': deviceId,
+          't': (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString(),
+          'dps': dps,
+        });
 
-      final key = enc.Key.fromUtf8(localKey);
-      final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.ecb, padding: 'PKCS7'));
-      final encrypted = encrypter.encrypt(payload).bytes;
+        final key = enc.Key.fromUtf8(localKey);
+        final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.ecb, padding: 'PKCS7'));
+        final encrypted = encrypter.encrypt(payload).bytes;
 
-      final body = BytesBuilder()
-        ..add(utf8.encode('3.3\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'))
-        ..add(encrypted);
-      final bodyBytes = body.toBytes();
-
-      final header = ByteData(16)
-        ..setUint32(0, 0x000055AA, Endian.big)
-        ..setUint32(4, 1, Endian.big)
-        ..setUint32(8, 7, Endian.big)
-        ..setUint32(12, bodyBytes.length + 8, Endian.big);
-
-      final frame = BytesBuilder()
-        ..add(header.buffer.asUint8List())
-        ..add(bodyBytes);
-
-      int crc = 0xFFFFFFFF;
-      for (final b in frame.toBytes()) {
-        crc ^= b;
-        for (int i = 0; i < 8; i++) {
-          crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+        final body = BytesBuilder();
+        if (version == '3.1') {
+          body.add(encrypted);
+        } else {
+          final versionBytes = utf8.encode(version);
+          final padLength = (15 - versionBytes.length).clamp(0, 15);
+          body.add(versionBytes);
+          if (padLength > 0) {
+            body.add(Uint8List(padLength));
+          }
+          body.add(encrypted);
         }
+        final bodyBytes = body.toBytes();
+
+        final header = ByteData(16)
+          ..setUint32(0, 0x000055AA, Endian.big)
+          ..setUint32(4, 1, Endian.big)
+          ..setUint32(8, 7, Endian.big)
+          ..setUint32(12, bodyBytes.length + 8, Endian.big);
+
+        final frame = BytesBuilder()
+          ..add(header.buffer.asUint8List())
+          ..add(bodyBytes);
+
+        int crc = 0xFFFFFFFF;
+        for (final b in frame.toBytes()) {
+          crc ^= b;
+          for (int i = 0; i < 8; i++) {
+            crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+          }
+        }
+        crc ^= 0xFFFFFFFF;
+
+        final footer = ByteData(8)
+          ..setUint32(0, crc, Endian.big)
+          ..setUint32(4, 0x0000AA55, Endian.big);
+        frame.add(footer.buffer.asUint8List());
+
+        socket.add(frame.toBytes());
+        await socket.flush();
+      } finally {
+        await socket.close();
       }
-      crc ^= 0xFFFFFFFF;
-
-      final footer = ByteData(8)
-        ..setUint32(0, crc, Endian.big)
-        ..setUint32(4, 0x0000AA55, Endian.big);
-      frame.add(footer.buffer.asUint8List());
-
-      socket.add(frame.toBytes());
-      await socket.flush();
-    } finally {
-      await socket.close();
-    }
+    });
   }
 
   /// Auto-detects Wipro Next / Tuya Smart Bulbs on the local Wi-Fi network (Ports 6667 UDP & 6668 TCP)
