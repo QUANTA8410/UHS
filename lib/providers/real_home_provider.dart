@@ -1896,6 +1896,8 @@ class RealHomeProvider extends ChangeNotifier {
         if (level != null && power) {
           await _controller.setPrimaryLevel(targetDev, level);
         }
+        _controller.computeDeviceLiveWattage(targetDev);
+        notifyListeners();
       },
     );
     if (logs.isNotEmpty) {
@@ -2160,6 +2162,7 @@ class RealHomeProvider extends ChangeNotifier {
     if (rule.targetLevel != null && rule.targetPowerState) {
       await _controller.setPrimaryLevel(targetDevice, rule.targetLevel!);
     }
+    _controller.computeDeviceLiveWattage(targetDevice);
     rule.lastTriggeredAt = DateTime.now();
     await _saveState();
     notifyListeners();

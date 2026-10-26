@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:http/http.dart' as http;
+import 'package:network_info_plus/network_info_plus.dart';
 import 'master/zero_touch_onboarding_service.dart';
 import 'tv/oneplus_connect_service.dart';
 
@@ -776,13 +777,13 @@ class RealIotController {
   // 4. PHILIPS HUE BRIDGE DISCOVERY, PUSHLINK PAIRING & LIGHT ENUMERATION
   // ---------------------------------------------------------------------------
   /// Finds Philips Hue Bridge IP via Official MeetHue Discovery + Local Subnet Scan
-  Future<List<String>> discoverHueBridgeIps() async {
+  Future<List<String>> discoverHueBridgeIps({String? subnetPrefix, String? localIp}) async {
     final List<String> ips = [];
     // 1. Official MeetHue discovery endpoint
     try {
-      final res = await http
-          .get(Uri.parse('https://discovery.meethue.com/'))
-          .timeout(const Duration(seconds: 4));
+      final res = await _get(
+        Uri.parse('https://discovery.meethue.com/'),
+      ).timeout(const Duration(seconds: 4));
       if (res.statusCode == 200) {
         final list = jsonDecode(res.body) as List<dynamic>;
         for (final item in list) {
@@ -796,21 +797,46 @@ class RealIotController {
 
     // 2. Local subnet scan fallback on port 80 /api/config
     if (ips.isEmpty) {
-      final subnets = ['192.168.1.', '192.168.0.', '192.168.29.'];
+      final subnets = <String>[];
+      if (subnetPrefix != null && subnetPrefix.trim().isNotEmpty) {
+        final p = subnetPrefix.trim();
+        subnets.add(p.endsWith('.') ? p : '$p.');
+      }
+      try {
+        final wifiIp = localIp ?? await NetworkInfo().getWifiIP();
+        if (wifiIp != null && wifiIp.contains('.')) {
+          final parts = wifiIp.split('.');
+          if (parts.length == 4) {
+            final detected = '${parts[0]}.${parts[1]}.${parts[2]}.';
+            if (!subnets.contains(detected)) subnets.add(detected);
+          }
+        }
+      } catch (_) {}
+
+      for (final defaultSub in const ['192.168.1.', '192.168.0.', '192.168.29.']) {
+        if (!subnets.contains(defaultSub)) subnets.add(defaultSub);
+      }
+
       for (final sub in subnets) {
-        for (final host in [2, 10, 20, 50, 100, 150, 200]) {
-          final testIp = '$sub$host';
-          try {
-            final res = await http
-                .get(Uri.parse('http://$testIp/api/config'))
-                .timeout(const Duration(milliseconds: 300));
-            if (res.statusCode == 200 &&
-                (res.body.toLowerCase().contains('philips hue') ||
-                    res.body.toLowerCase().contains('hue bridge'))) {
-              if (!ips.contains(testIp)) ips.add(testIp);
-              break;
-            }
-          } catch (_) {}
+        final allHosts = List<int>.generate(254, (i) => i + 1);
+        const chunkSize = 25;
+        for (var i = 0; i < allHosts.length; i += chunkSize) {
+          final end = (i + chunkSize > allHosts.length) ? allHosts.length : i + chunkSize;
+          final chunk = allHosts.sublist(i, end);
+          await Future.wait(chunk.map((host) async {
+            final testIp = '$sub$host';
+            try {
+              final res = await _get(
+                Uri.parse('http://$testIp/api/config'),
+              ).timeout(const Duration(milliseconds: 350));
+              if (res.statusCode == 200 &&
+                  (res.body.toLowerCase().contains('philips hue') ||
+                      res.body.toLowerCase().contains('hue bridge'))) {
+                if (!ips.contains(testIp)) ips.add(testIp);
+              }
+            } catch (_) {}
+          }));
+          if (ips.isNotEmpty) break;
         }
         if (ips.isNotEmpty) break;
       }
@@ -1795,6 +1821,13 @@ class RealIotController {
       computeDeviceLiveWattage(device);
       return;
     }
+    if (device.isLgThinq) {
+      await _dispatchLgPower(device, turnOn);
+      device.isOn = turnOn;
+      device.markOnlineSuccess();
+      computeDeviceLiveWattage(device);
+      return;
+    }
     switch (device.protocol) {
       case ConnectionProtocol.lgThinqCloud:
         await _dispatchLgPower(device, turnOn);
@@ -2354,6 +2387,12 @@ class RealIotController {
   Future<void> setPrimaryLevel(RealSmartDevice device, double value) async {
     if (device.isDummy) {
       device.primaryValue = value;
+      device.markOnlineSuccess();
+      computeDeviceLiveWattage(device);
+      return;
+    }
+    if (device.isLgThinq) {
+      await _dispatchLgPrimaryLevel(device, value);
       device.markOnlineSuccess();
       computeDeviceLiveWattage(device);
       return;

@@ -150,6 +150,7 @@ class ZeroTouchOnboardingService {
     String? patTokenOverride,
   }) async {
     final token = patTokenOverride ?? device.credentials['token'] ?? '';
+    if (token.isEmpty || token.contains('demo') || token.contains('test') || device.isDummy) return;
     final country = device.credentials['country'] ?? 'IN';
     final gw = device.credentials['gatewayUrl'] ?? _lgRegionalGateways.first;
     final isAtToken = token.startsWith('at_');
