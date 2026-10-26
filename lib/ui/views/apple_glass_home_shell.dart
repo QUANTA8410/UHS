@@ -231,6 +231,7 @@ class _GlassDashboardTabState extends State<_GlassDashboardTab> {
   Widget build(BuildContext context) {
     final home = context.watch<RealHomeProvider>();
     final devices = home.devices;
+    _houseLayout.autoBindRealDevices(devices);
     final activeCount = devices.where((d) => d.isOn).length;
 
     if (devices.isEmpty) {
@@ -1083,6 +1084,8 @@ class _Interactive3DMapTabState extends State<_Interactive3DMapTab> {
   Future<void> _loadLayout() async {
     final loaded = await House3DTwinLayout.loadFromPrefs();
     if (mounted) {
+      final home = context.read<RealHomeProvider>();
+      loaded.autoBindRealDevices(home.devices);
       setState(() => _layout = loaded);
     }
   }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/real_iot_controller.dart';
 
 /// Architectural floor material types matching House Control Three.js procedural floors.
 enum FloorMaterialType {
@@ -209,7 +210,7 @@ class Fixture3DNode {
 
   factory Fixture3DNode.fromJson(Map<String, dynamic> json) {
     return Fixture3DNode(
-      id: json['id'] as String? ?? UniqueKey().toString(),
+      id: json['id'] as String? ?? '${json['roomId'] ?? 'living'}.${json['fixtureType'] ?? 'ceiling'}',
       label: json['label'] as String? ?? 'Fixture',
       fixtureType: json['fixtureType'] as String? ?? 'ceiling',
       roomId: json['roomId'] as String? ?? 'living',
@@ -311,7 +312,7 @@ class Furniture3DProp {
 
   factory Furniture3DProp.fromJson(Map<String, dynamic> json) {
     return Furniture3DProp(
-      id: json['id'] as String? ?? UniqueKey().toString(),
+      id: json['id'] as String? ?? '${json['roomId'] ?? 'living'}.${json['type'] ?? json['propType'] ?? 'prop'}',
       type: json['type'] as String? ?? 'sofa',
       roomId: json['roomId'] as String? ?? 'living',
       x: (json['x'] as num?)?.toDouble() ?? 0.2,
@@ -527,6 +528,7 @@ class House3DTwinLayout {
         zHeight: 0.95,
         capabilities: ['brightness', 'temp'],
         kelvinTemp: 4200,
+        linkedRealDeviceId: 'light_living_chandelier_01',
       ),
       Fixture3DNode(
         id: 'living.floor',
@@ -538,6 +540,7 @@ class House3DTwinLayout {
         zHeight: 0.55,
         capabilities: ['brightness'],
         kelvinTemp: 2700,
+        linkedRealDeviceId: 'light_living_backlight_01',
       ),
       Fixture3DNode(
         id: 'living.tv',
@@ -549,6 +552,7 @@ class House3DTwinLayout {
         zHeight: 0.45,
         colorHex: '#7B5CFF',
         capabilities: ['brightness', 'color'],
+        linkedRealDeviceId: 'samsung_tv_theframe_01',
       ),
       Fixture3DNode(
         id: 'living.ac',
@@ -559,6 +563,7 @@ class House3DTwinLayout {
         x: 0.04,
         y: 0.58,
         zHeight: 0.82,
+        linkedRealDeviceId: 'lg_ac_dualcool_01',
       ),
       Fixture3DNode(
         id: 'living.camera',
@@ -594,6 +599,7 @@ class House3DTwinLayout {
         zHeight: 0.95,
         capabilities: ['brightness'],
         kelvinTemp: 4000,
+        linkedRealDeviceId: 'light_kitchen_island_01',
       ),
       Fixture3DNode(
         id: 'kitchen.strip',
@@ -615,6 +621,7 @@ class House3DTwinLayout {
         x: 0.92,
         y: 0.10,
         zHeight: 0.28,
+        linkedRealDeviceId: 'samsung_washer_ecobubble_01',
       ),
 
       // Bedroom
@@ -628,6 +635,7 @@ class House3DTwinLayout {
         zHeight: 0.95,
         capabilities: ['brightness', 'temp'],
         kelvinTemp: 3000,
+        linkedRealDeviceId: 'light_bed_pendant_01',
       ),
       Fixture3DNode(
         id: 'bedroom.left',
@@ -658,6 +666,7 @@ class House3DTwinLayout {
         x: 0.32,
         y: 0.04,
         zHeight: 0.82,
+        linkedRealDeviceId: 'samsung_ac_windfree_01',
       ),
 
       // Bathroom
@@ -902,6 +911,40 @@ class House3DTwinLayout {
       furniture: furniture,
       scenes: HouseScene3D.defaultScenes(),
     );
+  }
+
+  /// Automatically binds unlinked Fixture3DNode items by matching roomId and
+  /// category / fixtureType whenever devices are added or loaded.
+  void autoBindRealDevices(List<RealSmartDevice> devices) {
+    final boundDeviceIds = <String>{};
+    for (final fix in fixtures) {
+      if (fix.linkedRealDeviceId != null &&
+          devices.any((d) => d.id == fix.linkedRealDeviceId)) {
+        boundDeviceIds.add(fix.linkedRealDeviceId!);
+      }
+    }
+
+    for (final fixture in fixtures) {
+      if (fixture.linkedRealDeviceId != null &&
+          devices.any((d) => d.id == fixture.linkedRealDeviceId)) {
+        continue;
+      }
+      final match = devices.where((d) {
+        if (boundDeviceIds.contains(d.id)) return false;
+        final sameRoom = d.room.toLowerCase().contains(fixture.roomId.toLowerCase());
+        if (fixture.fixtureType == 'wall_ac') return sameRoom && d.category == 'ac';
+        if (fixture.fixtureType == 'washer') return d.category == 'washer';
+        if (fixture.fixtureType == 'camera') return d.category == 'camera';
+        if (fixture.fixtureType == 'strip' && fixture.id.contains('tv')) {
+          return sameRoom && (d.category == 'tv' || d.category == 'light');
+        }
+        return sameRoom && d.category == 'light';
+      });
+      if (match.isNotEmpty) {
+        fixture.linkedRealDeviceId = match.first.id;
+        boundDeviceIds.add(match.first.id);
+      }
+    }
   }
 
   Map<String, dynamic> toJson() => {

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/house_3d_twin_model.dart';
 import '../services/master/cross_brand_reflex_bus.dart';
 import '../services/master/presence_and_os_bridge.dart';
 import '../services/master/self_healing_network_engine.dart';
@@ -256,6 +257,7 @@ class RealHomeProvider extends ChangeNotifier {
             _devices
               ..clear()
               ..addAll(loaded);
+            unawaited(autoBind3DTwinLayout());
           }
         }
       }
@@ -338,6 +340,7 @@ class RealHomeProvider extends ChangeNotifier {
       final jsonDevices = jsonEncode(_devices.map((d) => d.toJson()).toList());
       await prefs.setString('unified_home_paired_devices_v4', jsonDevices);
       await prefs.setString('real_devices_v2', jsonDevices);
+      unawaited(autoBind3DTwinLayout());
     }
     await prefs.setString(
       'real_automations_v2',
@@ -385,6 +388,17 @@ class RealHomeProvider extends ChangeNotifier {
     final todayStr = '${DateTime.now().year}-${DateTime.now().month}-${DateTime.now().day}';
     await prefs.setString('energy_date_ymd', todayStr);
     await prefs.setDouble('energy_today_kwh', todayAccumulatedKwh);
+  }
+
+  /// Auto-binds unlinked 3D twin layout fixtures to real or sample devices.
+  Future<void> autoBind3DTwinLayout() async {
+    try {
+      final layout = await House3DTwinLayout.loadFromPrefs();
+      layout.autoBindRealDevices(_devices);
+      await layout.saveToPrefs();
+    } catch (e) {
+      debugPrint('Error auto-binding 3D twin layout: $e');
+    }
   }
 
   Future<void> togglePower(String id) async {
@@ -1764,6 +1778,7 @@ class RealHomeProvider extends ChangeNotifier {
     }
     _devices.addAll(sampleDevices);
     await _saveState();
+    await autoBind3DTwinLayout();
     notifyListeners();
   }
 

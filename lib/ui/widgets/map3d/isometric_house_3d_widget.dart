@@ -344,6 +344,7 @@ class IsometricHouse3DWidgetState extends State<IsometricHouse3DWidget>
         _cameraAnimController.isAnimating ? _focusAnim.value : _focus;
 
     final badges = <Widget>[];
+    _layout.autoBindRealDevices(devices);
 
     for (final fix in _layout.fixtures) {
       final boundDev = _findBoundDevice(fix, devices);
