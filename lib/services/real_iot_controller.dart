@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:http/http.dart' as http;
 import 'package:network_info_plus/network_info_plus.dart';
@@ -146,11 +147,13 @@ class RealSmartDevice {
       case ConnectionProtocol.tuyaLocalLan:
         final ip = credentials['ip'];
         final localKey = credentials['localKey'];
+        final token = credentials['accessToken'] ?? credentials['token'];
+        final hasValidKey = localKey != null && localKey.trim().length == 16;
+        final hasValidToken = token != null && token.trim().length > 5 && !token.toLowerCase().contains('demo');
         return ip != null &&
             ip.trim().isNotEmpty &&
             !ip.toLowerCase().contains('demo') &&
-            localKey != null &&
-            localKey.trim().length == 16;
+            (hasValidKey || hasValidToken);
 
       case ConnectionProtocol.tuyaCloudDirect:
         final token = credentials['accessToken'] ?? credentials['token'];
@@ -229,6 +232,14 @@ class RealSmartDevice {
     }
   }
 
+  bool get isPendingKey {
+    if (protocol == ConnectionProtocol.tuyaLocalLan) {
+      final lk = credentials['localKey'];
+      return lk == null || lk.trim().length != 16;
+    }
+    return false;
+  }
+
   bool get isDummy {
     if (hasRealHardwareCredentials) return false;
     final vendor = credentials['vendor']?.toString().toLowerCase();
@@ -236,6 +247,13 @@ class RealSmartDevice {
     final isDemoVal = (credentials as dynamic)['isDemo'];
     if (isDemoVal == true || isDemoVal?.toString().toLowerCase() == 'true') return true;
     if (credentials['token']?.toString().toLowerCase().contains('demo') == true) return true;
+    // Tuya LAN bulb pending local key without cloud token fallback behaves as dummy
+    if (protocol == ConnectionProtocol.tuyaLocalLan && isPendingKey) {
+      final token = credentials['accessToken'] ?? credentials['token'];
+      if (token == null || token.toString().trim().isEmpty) {
+        return true;
+      }
+    }
     return false;
   }
   String get statusSummary => isOnline ? (isOn ? 'On • ${primaryValue.round()}' : 'Off') : 'Offline';
@@ -1924,13 +1942,36 @@ class RealIotController {
       case ConnectionProtocol.tuyaLocalLan:
         final ip = _requireCredential(device, 'ip');
         final devId = device.id;
-        final localKey = _requireCredential(device, 'localKey');
-        if (localKey.length != 16) {
+        final localKey = device.credentials['localKey'] ?? '';
+        final token = device.credentials['accessToken'] ?? device.credentials['token'];
+        if (localKey.length == 16) {
+          final version = device.credentials['version'] ?? '3.3';
+          await _sendTuyaEncryptedFrame(ip, devId, localKey, {'20': turnOn}, version: version);
+          device.isOn = turnOn;
+        } else if (token != null && token.trim().length > 5 && !token.toLowerCase().contains('demo')) {
+          final res = await _post(
+            Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'header': {
+                'name': 'turnOnOff',
+                'namespace': 'control',
+                'payloadVersion': 1,
+              },
+              'payload': {
+                'accessToken': token,
+                'devId': devId,
+                'value': turnOn ? 1 : 0,
+              },
+            }),
+          ).timeout(const Duration(seconds: 8));
+          if (res.statusCode != 200) {
+            throw Exception('Tuya Cloud fallback failed (${res.statusCode}): ${res.body}');
+          }
+          device.isOn = turnOn;
+        } else {
           throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
         }
-        final version = device.credentials['version'] ?? '3.3';
-        await _sendTuyaEncryptedFrame(ip, devId, localKey, {'20': turnOn}, version: version);
-        device.isOn = turnOn;
         break;
 
       case ConnectionProtocol.onePlusTvLan:
@@ -2464,20 +2505,44 @@ class RealIotController {
 
       case ConnectionProtocol.tuyaLocalLan:
         final ip = _requireCredential(device, 'ip');
-        final localKey = _requireCredential(device, 'localKey');
-        if (localKey.length != 16) {
+        final localKey = device.credentials['localKey'] ?? '';
+        final token = device.credentials['accessToken'] ?? device.credentials['token'];
+        if (localKey.length == 16) {
+          final version = device.credentials['version'] ?? '3.3';
+          // Tuya DPS 22 is brightness (10 to 1000)
+          await _sendTuyaEncryptedFrame(
+            ip,
+            device.id,
+            localKey,
+            {'20': true, '22': (value * 10).round().clamp(10, 1000)},
+            version: version,
+          );
+          device.primaryValue = value;
+        } else if (token != null && token.trim().length > 5 && !token.toLowerCase().contains('demo')) {
+          final clamped = value.round().clamp(1, 100);
+          final res = await _post(
+            Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'header': {
+                'name': 'brightnessSet',
+                'namespace': 'control',
+                'payloadVersion': 1,
+              },
+              'payload': {
+                'accessToken': token,
+                'devId': device.id,
+                'value': clamped,
+              },
+            }),
+          ).timeout(const Duration(seconds: 8));
+          if (res.statusCode != 200) {
+            throw Exception('Tuya Cloud fallback level update failed (${res.statusCode})');
+          }
+          device.primaryValue = value;
+        } else {
           throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
         }
-        final version = device.credentials['version'] ?? '3.3';
-        // Tuya DPS 22 is brightness (10 to 1000)
-        await _sendTuyaEncryptedFrame(
-          ip,
-          device.id,
-          localKey,
-          {'20': true, '22': (value * 10).round().clamp(10, 1000)},
-          version: version,
-        );
-        device.primaryValue = value;
         break;
 
       case ConnectionProtocol.tuyaCloudDirect:
@@ -2596,12 +2661,26 @@ class RealIotController {
   Future<void> sendTuyaLocalDps(RealSmartDevice device, Map<String, dynamic> dpsMap) async {
     if (device.isDummy) return;
     final ip = _requireCredential(device, 'ip');
-    final localKey = _requireCredential(device, 'localKey');
-    if (localKey.length != 16) {
+    final localKey = device.credentials['localKey'] ?? '';
+    final token = device.credentials['accessToken'] ?? device.credentials['token'];
+    if (localKey.length == 16) {
+      final version = device.credentials['version'] ?? '3.3';
+      await _sendTuyaEncryptedFrame(ip, device.id, localKey, dpsMap, version: version);
+    } else if (token != null && token.trim().length > 5 && !token.toLowerCase().contains('demo')) {
+      if (dpsMap.containsKey('20')) {
+        final isOn = dpsMap['20'] == true;
+        await _post(
+          Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'header': {'name': 'turnOnOff', 'namespace': 'control', 'payloadVersion': 1},
+            'payload': {'accessToken': token, 'devId': device.id, 'value': isOn ? 1 : 0},
+          }),
+        ).timeout(const Duration(seconds: 8));
+      }
+    } else {
       throw Exception("Wipro/Tuya Local LAN requires a 16-character LocalKey for device '${device.name}' (${device.id}).");
     }
-    final version = device.credentials['version'] ?? '3.3';
-    await _sendTuyaEncryptedFrame(ip, device.id, localKey, dpsMap, version: version);
   }
 
   Future<void> _sendTuyaEncryptedFrame(
@@ -2672,10 +2751,158 @@ class RealIotController {
     });
   }
 
+  /// Decodes and decrypts Tuya UDP broadcast beacon packets (UDP 6667 / 6666)
+  /// Supports Tuya 3.1 (plaintext JSON), 3.3 and 3.4 (AES-128-ECB with md5('yGAdlopoPVldABfn'))
+  static Map<String, dynamic>? decodeTuyaUdpPacket(Uint8List data, [String senderIp = '']) {
+    if (data.length < 16) return null;
+
+    // 1. Plaintext JSON beacon (Tuya 3.1 on UDP 6666)
+    try {
+      final text = utf8.decode(data, allowMalformed: true).trim();
+      if (text.contains('gwId') || text.contains('ip') || text.contains('devId')) {
+        final start = text.indexOf('{');
+        final end = text.lastIndexOf('}');
+        if (start != -1 && end > start) {
+          final decoded = jsonDecode(text.substring(start, end + 1));
+          if (decoded is Map<String, dynamic>) {
+            return {
+              'devId': (decoded['gwId'] ?? decoded['devId'])?.toString(),
+              'ip': decoded['ip']?.toString() ?? senderIp,
+              'version': decoded['version']?.toString() ?? '3.1',
+              'productKey': decoded['productKey']?.toString(),
+              'raw': decoded,
+            };
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 2. Encrypted Tuya beacon (Tuya 3.3 / 3.4 on UDP 6667)
+    // Fixed UDP broadcast key = MD5('yGAdlopoPVldABfn')
+    try {
+      final udpKeyBytes = Uint8List.fromList(
+        md5.convert(utf8.encode('yGAdlopoPVldABfn')).bytes,
+      );
+      final key = enc.Key(udpKeyBytes);
+
+      final List<Uint8List> candidates = [];
+
+      // Frame prefix 0x000055AA
+      if (data.length >= 24) {
+        final prefix = ByteData.sublistView(data, 0, 4).getUint32(0, Endian.big);
+        if (prefix == 0x000055AA) {
+          // Standard Tuya frame without return code: 16-byte header + payload + 4-byte CRC + 4-byte suffix
+          if (data.length > 24) {
+            final p8 = data.sublist(16, data.length - 8);
+            if (p8.isNotEmpty && p8.length % 16 == 0) candidates.add(p8);
+          }
+          // Return code variant (bytes 16..19): 20-byte header + payload + 8-byte suffix
+          if (data.length > 28) {
+            final pret = data.sublist(20, data.length - 8);
+            if (pret.isNotEmpty && pret.length % 16 == 0) candidates.add(pret);
+          }
+          // Frame without CRC: 16-byte header + payload + 4-byte suffix
+          if (data.length > 20) {
+            final p4 = data.sublist(16, data.length - 4);
+            if (p4.isNotEmpty && p4.length % 16 == 0) candidates.add(p4);
+          }
+        }
+      }
+
+      // Raw AES blocks
+      if (data.length % 16 == 0) {
+        candidates.add(data);
+      }
+
+      for (final candidate in candidates) {
+        // Try PKCS7 unpadding first
+        try {
+          final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.ecb, padding: 'PKCS7'));
+          final decrypted = encrypter.decrypt(enc.Encrypted(candidate));
+          if (decrypted.contains('gwId') || decrypted.contains('ip') || decrypted.contains('devId')) {
+            final start = decrypted.indexOf('{');
+            final end = decrypted.lastIndexOf('}');
+            if (start != -1 && end > start) {
+              final decoded = jsonDecode(decrypted.substring(start, end + 1));
+              if (decoded is Map<String, dynamic>) {
+                return {
+                  'devId': (decoded['gwId'] ?? decoded['devId'])?.toString(),
+                  'ip': decoded['ip']?.toString() ?? senderIp,
+                  'version': decoded['version']?.toString() ?? '3.3',
+                  'productKey': decoded['productKey']?.toString(),
+                  'raw': decoded,
+                };
+              }
+            }
+          }
+        } catch (_) {}
+
+        // Fallback to null padding
+        try {
+          final rawEnc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.ecb, padding: null));
+          final rawBytes = rawEnc.decryptBytes(enc.Encrypted(candidate));
+          if (rawBytes.isNotEmpty) {
+            final pad = rawBytes.last;
+            final unpadded = (pad > 0 && pad <= 16)
+                ? rawBytes.sublist(0, rawBytes.length - pad)
+                : rawBytes;
+            final text = utf8.decode(unpadded, allowMalformed: true).trim();
+            if (text.contains('gwId') || text.contains('ip') || text.contains('devId')) {
+              final start = text.indexOf('{');
+              final end = text.lastIndexOf('}');
+              if (start != -1 && end > start) {
+                final decoded = jsonDecode(text.substring(start, end + 1));
+                if (decoded is Map<String, dynamic>) {
+                  return {
+                    'devId': (decoded['gwId'] ?? decoded['devId'])?.toString(),
+                    'ip': decoded['ip']?.toString() ?? senderIp,
+                    'version': decoded['version']?.toString() ?? '3.3',
+                    'productKey': decoded['productKey']?.toString(),
+                    'raw': decoded,
+                  };
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   /// Auto-detects Wipro Next / Tuya Smart Bulbs on the local Wi-Fi network (Ports 6667 UDP & 6668 TCP)
-  Future<List<RealSmartDevice>> discoverLocalWiproBulbs({String subnet = '192.168.1.'}) async {
+  Future<List<RealSmartDevice>> discoverLocalWiproBulbs({
+    String subnet = '192.168.1.',
+    Map<String, String>? knownDeviceKeys,
+    List<RealSmartDevice>? existingDevices,
+  }) async {
     final List<RealSmartDevice> detected = [];
+    final seenDevIds = <String>{};
     final seenIps = <String>{};
+
+    // Helper to cross-reference localKey or cloud token
+    (String, String?) resolveCredentials(String devId, String ip) {
+      if (knownDeviceKeys != null) {
+        if (knownDeviceKeys[devId]?.trim().length == 16) return (knownDeviceKeys[devId]!.trim(), null);
+        if (knownDeviceKeys[ip]?.trim().length == 16) return (knownDeviceKeys[ip]!.trim(), null);
+      }
+      if (existingDevices != null) {
+        for (final ed in existingDevices) {
+          if (ed.id == devId || ed.credentials['devId'] == devId || ed.credentials['ip'] == ip) {
+            final lk = ed.credentials['localKey'];
+            final token = ed.credentials['accessToken'] ?? ed.credentials['token'];
+            if (lk != null && lk.trim().length == 16) {
+              return (lk.trim(), token);
+            }
+            if (token != null && token.trim().isNotEmpty && !token.toLowerCase().contains('demo')) {
+              return ('', token);
+            }
+          }
+        }
+      }
+      return ('', null);
+    }
 
     // 1. Listen for UDP broadcast beacons on port 6667 / 6666
     try {
@@ -2686,37 +2913,50 @@ class RealIotController {
           final dg = udpSocket.receive();
           if (dg != null) {
             final senderIp = dg.address.address;
-            if (!seenIps.contains(senderIp)) {
-              seenIps.add(senderIp);
-              try {
-                final text = utf8.decode(dg.data, allowMalformed: true);
-                String devId = 'wipro_${senderIp.replaceAll('.', '_')}';
-                if (text.contains('gwId')) {
-                  final parsed = jsonDecode(text);
-                  if (parsed is Map && parsed['gwId'] != null) {
-                    devId = parsed['gwId'].toString();
-                  }
+            final parsed = decodeTuyaUdpPacket(dg.data, senderIp);
+            if (parsed != null) {
+              final devId = parsed['devId']?.toString() ?? 'wipro_${senderIp.replaceAll('.', '_')}';
+              if (!seenDevIds.contains(devId)) {
+                seenDevIds.add(devId);
+                seenIps.add(senderIp);
+
+                final (harvestedKey, cloudToken) = resolveCredentials(devId, senderIp);
+                final isKeyValid = harvestedKey.length == 16;
+
+                final creds = <String, String>{
+                  'ip': senderIp,
+                  'port': '6668',
+                  'devId': devId,
+                  'version': parsed['version']?.toString() ?? '3.3',
+                };
+
+                if (isKeyValid) {
+                  creds['localKey'] = harvestedKey;
+                } else {
+                  creds['localKey'] = '';
+                  creds['isPendingKey'] = 'true';
+                  if (cloudToken != null) creds['accessToken'] = cloudToken;
                 }
+
                 detected.add(
                   RealSmartDevice(
                     id: devId,
                     name: 'Wipro Smart Next Bulb',
                     room: 'Living Room',
                     category: 'light',
-                    protocol: ConnectionProtocol.tuyaLocalLan,
-                    credentials: {
-                      'ip': senderIp,
-                      'port': '6668',
-                      'devId': devId,
-                      'localKey': 'auto_detected_lan',
-                    },
+                    protocol: isKeyValid
+                        ? ConnectionProtocol.tuyaLocalLan
+                        : (cloudToken != null
+                            ? ConnectionProtocol.tuyaCloudDirect
+                            : ConnectionProtocol.tuyaLocalLan),
+                    credentials: creds,
                     isOn: true,
                     isOnline: true,
                     primaryValue: 80.0,
                     ratedMaxWatts: 9.0,
                   ),
                 );
-              } catch (_) {}
+              }
             }
           }
         }
@@ -2749,22 +2989,38 @@ class RealIotController {
         final batch = chunk.map((ip) async {
           if (seenIps.contains(ip)) return;
           try {
-            final s = await Socket.connect(ip, 6668, timeout: const Duration(milliseconds: 350));
+            final s = await _socketConnect(ip, 6668, timeout: const Duration(milliseconds: 350));
             try {
               final id = 'wipro_${ip.replaceAll('.', '_')}';
+              final (harvestedKey, cloudToken) = resolveCredentials(id, ip);
+              final isKeyValid = harvestedKey.length == 16;
+
+              final creds = <String, String>{
+                'ip': ip,
+                'port': '6668',
+                'devId': id,
+                'version': '3.3',
+              };
+              if (isKeyValid) {
+                creds['localKey'] = harvestedKey;
+              } else {
+                creds['localKey'] = '';
+                creds['isPendingKey'] = 'true';
+                if (cloudToken != null) creds['accessToken'] = cloudToken;
+              }
+
               detected.add(
                 RealSmartDevice(
                   id: id,
                   name: 'Wipro Smart Next Bulb ($ip)',
                   room: 'Living Room',
                   category: 'light',
-                  protocol: ConnectionProtocol.tuyaLocalLan,
-                  credentials: {
-                    'ip': ip,
-                    'port': '6668',
-                    'devId': id,
-                    'localKey': 'auto_detected_lan',
-                  },
+                  protocol: isKeyValid
+                      ? ConnectionProtocol.tuyaLocalLan
+                      : (cloudToken != null
+                          ? ConnectionProtocol.tuyaCloudDirect
+                          : ConnectionProtocol.tuyaLocalLan),
+                  credentials: creds,
                   isOn: true,
                   isOnline: true,
                   primaryValue: 80.0,

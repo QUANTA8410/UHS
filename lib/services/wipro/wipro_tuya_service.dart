@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:http/http.dart' as http;
+import '../real_iot_controller.dart';
 
 /// Credentials for the Tuya Cloud OpenAPI ("Smart Home" project linked to Smart Life).
 class TuyaCredentials {
@@ -798,14 +799,26 @@ class WiproTuyaService {
           final datagram = socket?.receive();
           if (datagram != null) {
             try {
-              final text = utf8.decode(datagram.data, allowMalformed: true);
-              if (text.contains('gwId') || text.contains('ip')) {
+              final parsed = RealIotController.decodeTuyaUdpPacket(datagram.data, datagram.address.address);
+              if (parsed != null) {
                 discovered.add({
                   'ip': datagram.address.address,
                   'port': datagram.port,
-                  'raw': text,
+                  'gwId': parsed['devId'],
+                  'version': parsed['version'],
+                  'raw': parsed['raw'],
                   'discoveredAt': DateTime.now().toIso8601String(),
                 });
+              } else {
+                final text = utf8.decode(datagram.data, allowMalformed: true);
+                if (text.contains('gwId') || text.contains('ip')) {
+                  discovered.add({
+                    'ip': datagram.address.address,
+                    'port': datagram.port,
+                    'raw': text,
+                    'discoveredAt': DateTime.now().toIso8601String(),
+                  });
+                }
               }
             } catch (_) {}
           }

@@ -64,7 +64,7 @@ class SmartAutomationRule {
 }
 
 class RealHomeProvider extends ChangeNotifier {
-  final RealIotController _controller = RealIotController();
+  final RealIotController _controller;
   RealIotController get iot => _controller;
   final SelfHealingNetworkEngine networkEngine = SelfHealingNetworkEngine();
   final ZeroTouchOnboardingService zeroTouch = ZeroTouchOnboardingService();
@@ -121,7 +121,11 @@ class RealHomeProvider extends ChangeNotifier {
 
   bool _isDisposed = false;
 
-  RealHomeProvider({bool autoInitStorage = true, bool autoStartPolling = true}) {
+  RealHomeProvider({
+    RealIotController? controller,
+    bool autoInitStorage = true,
+    bool autoStartPolling = true,
+  }) : _controller = controller ?? RealIotController() {
     // Initialize OS Listeners for Deep Links & Incoming Calls
     osBridge.initializeOsListeners(
       onNfcOrDeepLinkTriggered: (uri) => handleNfcOrDeepLink(uri),
@@ -1447,10 +1451,43 @@ class RealHomeProvider extends ChangeNotifier {
     lastGlobalError = null;
     notifyListeners();
     try {
-      final found = await _controller.discoverLocalWiproBulbs(subnet: subnet);
+      final found = await _controller.discoverLocalWiproBulbs(
+        subnet: subnet,
+        existingDevices: _devices,
+      );
       for (final d in found) {
-        _devices.removeWhere((existing) => existing.id == d.id);
-        _devices.add(d);
+        final existingIdx = _devices.indexWhere(
+          (existing) => existing.id == d.id || existing.credentials['ip'] == d.credentials['ip'],
+        );
+        if (existingIdx != -1) {
+          final existing = _devices[existingIdx];
+          final existingLk = existing.credentials['localKey'];
+          final existingToken = existing.credentials['accessToken'] ?? existing.credentials['token'];
+          if ((existingLk != null && existingLk.length == 16) && d.credentials['localKey']?.length != 16) {
+            d.credentials['localKey'] = existingLk;
+          }
+          if (existingToken != null && existingToken.isNotEmpty && (d.credentials['accessToken'] == null || d.credentials['accessToken']!.isEmpty)) {
+            d.credentials['accessToken'] = existingToken;
+          }
+          final updatedDevice = RealSmartDevice(
+            id: d.id,
+            name: d.name,
+            room: d.room,
+            category: d.category,
+            protocol: (d.credentials['localKey']?.length == 16)
+                ? ConnectionProtocol.tuyaLocalLan
+                : d.protocol,
+            credentials: Map<String, String>.from(d.credentials),
+            isOn: d.isOn,
+            isOnline: d.isOnline,
+            primaryValue: d.primaryValue,
+            ratedMaxWatts: d.ratedMaxWatts,
+            liveAttributes: Map<String, dynamic>.from(d.liveAttributes),
+          );
+          _devices[existingIdx] = updatedDevice;
+        } else {
+          _devices.add(d);
+        }
       }
       await _saveState();
       return found.length;
