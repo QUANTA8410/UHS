@@ -1976,12 +1976,24 @@ class RealHomeProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> syncAllDevicesSilent() async {
+  Future<void> syncAllDevicesSilent({bool forceTuyaPoll = false}) async {
     if (_isPollingInFlight) return;
     try {
       _isPollingInFlight = true;
+      final now = DateTime.now();
       await Future.wait(
         _devices.map((dev) async {
+          // Tuya Cloud Direct enforces a strict rate limit (1 query per 60-120 seconds per device).
+          // Polling every 10 seconds causes Tuya's server (px1.tuyain.com) to throttle the token.
+          // Skip if less than 120 seconds have elapsed since the last poll (Bug 8).
+          if (!forceTuyaPoll && dev.protocol == ConnectionProtocol.tuyaCloudDirect) {
+            final lastPoll = dev.lastPolledAt;
+            if (lastPoll != null && now.difference(lastPoll).inSeconds < 120) {
+              return;
+            }
+            dev.lastPolledAt = now;
+          }
+
           try {
             await _controller.refreshDeviceStatus(dev).timeout(const Duration(seconds: 8));
             dev.markOnlineSuccess();

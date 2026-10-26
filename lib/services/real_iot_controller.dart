@@ -35,6 +35,7 @@ class RealSmartDevice {
   double ratedMaxWatts; // Hardware nameplate rating (used when device lacks a shunt sensor)
   Map<String, dynamic> liveAttributes;
   String? lastError;
+  DateTime? lastPolledAt;
 
   RealSmartDevice({
     required this.id,
@@ -51,6 +52,7 @@ class RealSmartDevice {
     this.ratedMaxWatts = 0.0,
     this.liveAttributes = const {},
     this.lastError,
+    this.lastPolledAt,
   });
 
   Map<String, dynamic> toJson() => {
@@ -68,12 +70,14 @@ class RealSmartDevice {
         'ratedMaxWatts': ratedMaxWatts,
         'liveAttributes': liveAttributes,
         if (lastError != null) 'lastError': lastError,
+        if (lastPolledAt != null) 'lastPolledAt': lastPolledAt!.toIso8601String(),
       };
 
   void markOnlineSuccess() {
     isOnline = true;
     consecutiveFailedPolls = 0;
     lastError = null;
+    lastPolledAt = DateTime.now();
   }
 
   bool get isPowered => isOn;
@@ -333,6 +337,7 @@ class RealSmartDevice {
     double? ratedMaxWatts,
     Map<String, dynamic>? liveAttributes,
     String? lastError,
+    DateTime? lastPolledAt,
   }) {
     return RealSmartDevice(
       id: id ?? this.id,
@@ -349,6 +354,7 @@ class RealSmartDevice {
       ratedMaxWatts: ratedMaxWatts ?? this.ratedMaxWatts,
       liveAttributes: liveAttributes ?? Map<String, dynamic>.from(this.liveAttributes),
       lastError: lastError ?? this.lastError,
+      lastPolledAt: lastPolledAt ?? this.lastPolledAt,
     );
   }
 
@@ -398,6 +404,9 @@ class RealSmartDevice {
       ratedMaxWatts: (json['ratedMaxWatts'] as num?)?.toDouble() ?? 0.0,
       liveAttributes: safeAttrs,
       lastError: json['lastError']?.toString(),
+      lastPolledAt: json['lastPolledAt'] != null
+          ? DateTime.tryParse(json['lastPolledAt'].toString())
+          : null,
     );
   }
 }
@@ -1307,7 +1316,7 @@ class RealIotController {
       case ConnectionProtocol.tuyaCloudDirect:
         final token = _requireCredential(device, 'accessToken', fallbacks: ['token']);
         try {
-          final res = await http.post(
+          final res = await _post(
             Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
@@ -1325,6 +1334,9 @@ class RealIotController {
 
           if (res.statusCode == 200) {
             final qJson = jsonDecode(res.body) as Map<String, dynamic>;
+            if (qJson['header']?['code'] != null && qJson['header']['code'] != 'SUCCESS') {
+              throw Exception('Tuya query error: ${qJson['header']?['msg'] ?? qJson['header']['code']}');
+            }
             final payload = qJson['payload'] as Map<String, dynamic>?;
             if (payload != null) {
               final dataMap = (payload['data'] as Map<String, dynamic>?) ?? payload;
@@ -1858,7 +1870,7 @@ class RealIotController {
 
       case ConnectionProtocol.tuyaCloudDirect:
         final token = _requireCredential(device, 'accessToken', fallbacks: ['token']);
-        final res = await http.post(
+        final res = await _post(
           Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
@@ -2094,7 +2106,18 @@ class RealIotController {
 
       case ConnectionProtocol.tuyaCloudDirect:
         final token = _requireCredential(device, 'accessToken', fallbacks: ['token']);
-        final res = await http.post(
+        final Map<String, dynamic> payload = {
+          'accessToken': token,
+          'devId': device.id,
+        };
+        if (command == 'colorSet' && arguments.isNotEmpty) {
+          payload['color'] = arguments.first;
+        } else if (arguments.isNotEmpty && arguments.first is Map) {
+          payload.addAll(Map<String, dynamic>.from(arguments.first as Map));
+        } else {
+          payload['value'] = arguments.isNotEmpty ? arguments.first : 1;
+        }
+        final res = await _post(
           Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
@@ -2103,16 +2126,16 @@ class RealIotController {
               'namespace': 'control',
               'payloadVersion': 1,
             },
-            'payload': {
-              'accessToken': token,
-              'devId': device.id,
-              'value': arguments.isNotEmpty ? arguments.first : 1,
-            },
+            'payload': payload,
           }),
         ).timeout(const Duration(seconds: 8));
 
         if (res.statusCode != 200) {
           throw Exception('Tuya direct command failed (${res.statusCode})');
+        }
+        final resBody = jsonDecode(res.body) as Map<String, dynamic>;
+        if (resBody['header']?['code'] != null && resBody['header']['code'] != 'SUCCESS') {
+          throw Exception('Tuya error: ${resBody['header']?['msg'] ?? resBody['header']['code']}');
         }
         break;
 
@@ -2330,7 +2353,7 @@ class RealIotController {
       case ConnectionProtocol.tuyaCloudDirect:
         final token = _requireCredential(device, 'accessToken', fallbacks: ['token']);
         final clamped = value.round().clamp(1, 100);
-        final res = await http.post(
+        final res = await _post(
           Uri.parse('https://px1.tuyain.com/homeassistant/skill'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
@@ -2349,6 +2372,10 @@ class RealIotController {
 
         if (res.statusCode != 200) {
           throw Exception('Wipro/Tuya brightness update failed (${res.statusCode})');
+        }
+        final resBody = jsonDecode(res.body) as Map<String, dynamic>;
+        if (resBody['header']?['code'] != null && resBody['header']['code'] != 'SUCCESS') {
+          throw Exception('Wipro/Tuya brightness error: ${resBody['header']?['msg'] ?? resBody['header']['code']}');
         }
         device.primaryValue = value;
         break;
