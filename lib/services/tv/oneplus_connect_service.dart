@@ -3,6 +3,10 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 class OnePlusConnectService {
+  final http.Client? client;
+
+  OnePlusConnectService({this.client});
+
   static const List<String> availableApps = [
     'OxygenPlay',
     'Netflix',
@@ -87,7 +91,12 @@ class OnePlusConnectService {
       // 2. Try HTTP Remote endpoint or DIAL
       try {
         final uri = Uri.parse('http://$host:8008/apps/OnePlusRemote');
-        await http.post(uri, body: {'action': keyUpper, 'code': '$keyCode'}).timeout(const Duration(seconds: 1));
+        final c = client;
+        if (c != null) {
+          await c.post(uri, body: {'action': keyUpper, 'code': '$keyCode'}).timeout(const Duration(seconds: 1));
+        } else {
+          await http.post(uri, body: {'action': keyUpper, 'code': '$keyCode'}).timeout(const Duration(seconds: 1));
+        }
         return true;
       } catch (_) {}
     }
@@ -95,6 +104,32 @@ class OnePlusConnectService {
     // Fallback simulated execution for local tests or unconfigured hosts
     await Future.delayed(const Duration(milliseconds: 40));
     return true;
+  }
+
+  /// Broadcasts a Wake-on-LAN magic packet (102 bytes: 6x 0xFF + 16x MAC) on UDP port 9 (Bug 10)
+  Future<bool> sendWakeOnLan(String macAddress) async {
+    try {
+      final cleanMac = macAddress.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '');
+      if (cleanMac.length != 12) return false;
+
+      final macBytes = <int>[];
+      for (int i = 0; i < 12; i += 2) {
+        macBytes.add(int.parse(cleanMac.substring(i, i + 2), radix: 16));
+      }
+
+      final packet = <int>[
+        ...List<int>.filled(6, 0xFF),
+        for (int i = 0; i < 16; i++) ...macBytes,
+      ];
+
+      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket.broadcastEnabled = true;
+      socket.send(packet, InternetAddress('255.255.255.255'), 9);
+      socket.close();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Launch application on OnePlus TV via Google Cast / DIAL protocol (port 8008)
@@ -108,8 +143,35 @@ class OnePlusConnectService {
       try {
         final dialAppName = appName == 'YouTube' ? 'YouTube' : (appName == 'Netflix' ? 'Netflix' : 'OxygenPlay');
         final uri = Uri.parse('http://$host:8008/apps/$dialAppName');
-        final res = await http.post(uri).timeout(const Duration(seconds: 2));
+        final c = client;
+        final res = c != null
+            ? await c.post(uri).timeout(const Duration(seconds: 2))
+            : await http.post(uri).timeout(const Duration(seconds: 2));
         if (res.statusCode == 200 || res.statusCode == 201) {
+          return true;
+        }
+      } catch (_) {}
+    }
+
+    await Future.delayed(const Duration(milliseconds: 80));
+    return true;
+  }
+
+  /// Terminate active DIAL application via instance endpoint `/apps/<appName>/run` (Bug 10)
+  Future<bool> terminateApp({
+    required String tvId,
+    required String appName,
+    String? host,
+  }) async {
+    if (host != null && host.isNotEmpty) {
+      try {
+        final dialAppName = appName == 'YouTube' ? 'YouTube' : (appName == 'Netflix' ? 'Netflix' : 'OxygenPlay');
+        final uri = Uri.parse('http://$host:8008/apps/$dialAppName/run');
+        final c = client;
+        final res = c != null
+            ? await c.delete(uri).timeout(const Duration(seconds: 2))
+            : await http.delete(uri).timeout(const Duration(seconds: 2));
+        if (res.statusCode == 200 || res.statusCode == 204 || res.statusCode == 404) {
           return true;
         }
       } catch (_) {}

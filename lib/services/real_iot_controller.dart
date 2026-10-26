@@ -468,6 +468,13 @@ class RealIotController {
         : http.post(url, headers: headers, body: body, encoding: encoding);
   }
 
+  Future<http.Response> _delete(Uri url, {Map<String, String>? headers, Object? body, Encoding? encoding}) {
+    final c = client;
+    return c != null
+        ? c.delete(url, headers: headers, body: body, encoding: encoding)
+        : http.delete(url, headers: headers, body: body, encoding: encoding);
+  }
+
   String _requireCredential(
     RealSmartDevice device,
     String key, {
@@ -1895,13 +1902,34 @@ class RealIotController {
 
       case ConnectionProtocol.onePlusTvLan:
         final ip = _requireCredential(device, 'ip');
-        // Trigger wake/standby or YouTube/Netflix DIAL launch over port 8008
-        final uri = Uri.parse('http://$ip:8008/apps/YouTube');
-        final res = turnOn
-            ? await http.post(uri).timeout(const Duration(seconds: 4))
-            : await http.delete(uri).timeout(const Duration(seconds: 4));
-        if (res.statusCode >= 400) {
-          throw Exception('OnePlus TV DIAL HTTP ${res.statusCode}');
+        final onePlus = OnePlusConnectService(client: client);
+
+        if (turnOn) {
+          // 1. Broadcast Wake-on-LAN if MAC address is provided in credentials (Bug 10)
+          final mac = device.credentials['mac'] ?? device.credentials['macAddress'];
+          if (mac != null && mac.isNotEmpty) {
+            await onePlus.sendWakeOnLan(mac);
+          }
+
+          // 2. Trigger wake / DIAL YouTube launch over port 8008
+          final uri = Uri.parse('http://$ip:8008/apps/YouTube');
+          final res = await _post(uri).timeout(const Duration(seconds: 4));
+          if (res.statusCode >= 400) {
+            // Fallback to sending POWER key if DIAL launch returns error
+            final sent = await onePlus.sendRemoteKey(tvId: device.id, keyAction: 'POWER', host: ip);
+            if (!sent) {
+              throw Exception('OnePlus TV DIAL HTTP ${res.statusCode}');
+            }
+          }
+        } else {
+          // Stop DIAL application: Must target the instance endpoint /apps/YouTube/run (Bug 10)
+          final uri = Uri.parse('http://$ip:8008/apps/YouTube/run');
+          final res = await _delete(uri).timeout(const Duration(seconds: 4));
+          // Send POWER key to put Android TV panel into standby
+          await onePlus.sendRemoteKey(tvId: device.id, keyAction: 'POWER', host: ip);
+          if (res.statusCode >= 400 && res.statusCode != 404) {
+            throw Exception('OnePlus TV DIAL HTTP ${res.statusCode}');
+          }
         }
         device.isOn = turnOn;
         break;
@@ -2044,9 +2072,11 @@ class RealIotController {
 
       case ConnectionProtocol.onePlusTvLan:
         final ip = _requireCredential(device, 'ip');
-        final onePlus = OnePlusConnectService();
+        final onePlus = OnePlusConnectService(client: client);
         if (command == 'launchApp' && arguments.isNotEmpty) {
           await onePlus.launchApp(tvId: device.id, appName: arguments.first.toString(), host: ip);
+        } else if (command == 'terminateApp' && arguments.isNotEmpty) {
+          await onePlus.terminateApp(tvId: device.id, appName: arguments.first.toString(), host: ip);
         } else if (command == 'switchInput' && arguments.isNotEmpty) {
           await onePlus.switchInput(tvId: device.id, inputSource: arguments.first.toString(), host: ip);
         } else if (command == 'sendKey' || command == 'setVolume' || command == 'volume') {
