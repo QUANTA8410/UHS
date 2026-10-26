@@ -2356,6 +2356,8 @@ class RealIotController {
     // Send ONVIF SOAP or HTTP CGI packet to camera
     if (ip.isNotEmpty) {
       try {
+        final panVel = direction == 'left' ? -0.5 : (direction == 'right' ? 0.5 : 0.0);
+        final tiltVel = direction == 'down' ? -0.5 : (direction == 'up' ? 0.5 : 0.0);
         final onvifSoap = '''
 <?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" xmlns:tt="http://www.onvif.org/ver10/schema">
@@ -2363,22 +2365,22 @@ class RealIotController {
     <tptz:ContinuousMove>
       <tptz:ProfileToken>Profile_1</tptz:ProfileToken>
       <tptz:Velocity>
-        <tt:PanTilt x="\${direction == 'left' ? -0.5 : (direction == 'right' ? 0.5 : 0.0)}" y="\${direction == 'down' ? -0.5 : (direction == 'up' ? 0.5 : 0.0)}" space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"/>
+        <tt:PanTilt x="$panVel" y="$tiltVel" space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"/>
       </tptz:Velocity>
     </tptz:ContinuousMove>
   </soap:Body>
 </soap:Envelope>''';
 
-        final onvifUri = Uri.parse('http://\$ip:8000/onvif/ptz_service');
-        await http.post(
+        final onvifUri = Uri.parse('http://$ip:8000/onvif/ptz_service');
+        await _post(
           onvifUri,
           headers: {'Content-Type': 'application/soap+xml; charset=utf-8; action="http://www.onvif.org/ver20/ptz/wsdl/ContinuousMove"'},
           body: onvifSoap,
         ).timeout(const Duration(milliseconds: 1500));
       } catch (_) {
         try {
-          final cgiUri = Uri.parse('http://\$ip/cgi-bin/ptz.cgi?action=move&dir=\$direction');
-          await http.get(cgiUri).timeout(const Duration(milliseconds: 1000));
+          final cgiUri = Uri.parse('http://$ip/cgi-bin/ptz.cgi?action=move&dir=$direction');
+          await _get(cgiUri).timeout(const Duration(milliseconds: 1000));
         } catch (_) {}
       }
     }
