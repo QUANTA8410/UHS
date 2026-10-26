@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import '../real_iot_controller.dart';
+import 'self_healing_network_engine.dart';
 
 class ZeroTouchOnboardingService {
   static final ZeroTouchOnboardingService instance = ZeroTouchOnboardingService();
@@ -402,80 +403,280 @@ class ZeroTouchOnboardingService {
     required String accessSecret,
     required String sampleDeviceId,
     String regionHost = 'https://openapi.tuyain.com',
+    http.Client? httpClient,
+    RealIotController? iotController,
+    SelfHealingNetworkEngine? networkEngine,
   }) async {
-    final t = DateTime.now().millisecondsSinceEpoch.toString();
-    // Step A: Obtain Tuya OpenAPI Access Token
-    final tokenPath = '/v1.0/token?grant_type=1';
-    final tokenSign = _signTuyaRequest(accessId, accessSecret, t, 'GET', tokenPath, '');
+    final client = httpClient ?? http.Client();
+    final shouldCloseClient = httpClient == null;
 
-    final tokenRes = await http.get(
-      Uri.parse('$regionHost$tokenPath'),
-      headers: {
-        'client_id': accessId,
-        'sign': tokenSign,
-        't': t,
-        'sign_method': 'HMAC-SHA256',
-      },
-    ).timeout(const Duration(seconds: 8));
+    try {
+      final t = DateTime.now().millisecondsSinceEpoch.toString();
+      // Step A: Obtain Tuya OpenAPI Access Token
+      final tokenPath = '/v1.0/token?grant_type=1';
+      final tokenSign = _signTuyaRequest(accessId, accessSecret, t, 'GET', tokenPath, '');
 
-    final tokenJson = jsonDecode(tokenRes.body) as Map<String, dynamic>;
-    if (tokenJson['success'] != true) {
-      throw Exception('Tuya Auth Failed: ${tokenJson['msg']}');
-    }
-    final accessToken = tokenJson['result']['access_token'] as String;
-
-    // Step B: Fetch Device Details including LocalKey
-    final devPath = '/v1.0/devices/$sampleDeviceId';
-    final t2 = DateTime.now().millisecondsSinceEpoch.toString();
-    final devSign = _signTuyaRequest(
-      accessId,
-      accessSecret,
-      t2,
-      'GET',
-      devPath,
-      '',
-      accessToken: accessToken,
-    );
-
-    final devRes = await http.get(
-      Uri.parse('$regionHost$devPath'),
-      headers: {
-        'client_id': accessId,
-        'access_token': accessToken,
-        'sign': devSign,
-        't': t2,
-        'sign_method': 'HMAC-SHA256',
-      },
-    ).timeout(const Duration(seconds: 8));
-
-    final devJson = jsonDecode(devRes.body) as Map<String, dynamic>;
-    if (devJson['success'] != true) {
-      throw Exception('Failed to extract Wipro LocalKey: ${devJson['msg']}');
-    }
-
-    final result = devJson['result'] as Map<String, dynamic>;
-    final extractedLocalKey = result['local_key']?.toString() ?? '';
-    final devName = result['name']?.toString() ?? 'Wipro Smart Bulb';
-    final localIp = result['ip']?.toString() ?? '';
-
-    return [
-      RealSmartDevice(
-        id: sampleDeviceId,
-        name: devName,
-        room: 'Living Room',
-        category: 'light',
-        protocol: ConnectionProtocol.tuyaLocalLan,
-        credentials: {
-          'ip': localIp,
-          'port': '6668',
-          'localKey': extractedLocalKey,
+      final tokenRes = await client.get(
+        Uri.parse('$regionHost$tokenPath'),
+        headers: {
+          'client_id': accessId,
+          'sign': tokenSign,
+          't': t,
+          'sign_method': 'HMAC-SHA256',
         },
-        isOn: result['online'] == true,
-        isOnline: result['online'] == true,
-        primaryValue: 80.0,
-        ratedMaxWatts: 9.0,
-      ),
-    ];
+      ).timeout(const Duration(seconds: 8));
+
+      final tokenJson = jsonDecode(tokenRes.body) as Map<String, dynamic>;
+      if (tokenJson['success'] != true) {
+        throw Exception('Tuya Auth Failed: ${tokenJson['msg']}');
+      }
+      final accessToken = tokenJson['result']['access_token'] as String;
+
+      // Step B: Fetch Device Details including User ID (uid) and sample localKey
+      final devPath = '/v1.0/devices/$sampleDeviceId';
+      final t2 = DateTime.now().millisecondsSinceEpoch.toString();
+      final devSign = _signTuyaRequest(
+        accessId,
+        accessSecret,
+        t2,
+        'GET',
+        devPath,
+        '',
+        accessToken: accessToken,
+      );
+
+      final devRes = await client.get(
+        Uri.parse('$regionHost$devPath'),
+        headers: {
+          'client_id': accessId,
+          'access_token': accessToken,
+          'sign': devSign,
+          't': t2,
+          'sign_method': 'HMAC-SHA256',
+        },
+      ).timeout(const Duration(seconds: 8));
+
+      final devJson = jsonDecode(devRes.body) as Map<String, dynamic>;
+      if (devJson['success'] != true) {
+        throw Exception('Failed to extract Wipro LocalKey: ${devJson['msg']}');
+      }
+
+      final sampleResult = devJson['result'] as Map<String, dynamic>;
+      final uid = sampleResult['uid']?.toString() ?? sampleResult['owner_id']?.toString() ?? '';
+
+      // Step C: Harvest all devices belonging to user (uid)
+      final List<Map<String, dynamic>> rawDevices = [];
+      if (uid.isNotEmpty) {
+        try {
+          final userDevPath = '/v1.0/users/$uid/devices';
+          final t3 = DateTime.now().millisecondsSinceEpoch.toString();
+          final userDevSign = _signTuyaRequest(
+            accessId,
+            accessSecret,
+            t3,
+            'GET',
+            userDevPath,
+            '',
+            accessToken: accessToken,
+          );
+
+          final userDevRes = await client.get(
+            Uri.parse('$regionHost$userDevPath'),
+            headers: {
+              'client_id': accessId,
+              'access_token': accessToken,
+              'sign': userDevSign,
+              't': t3,
+              'sign_method': 'HMAC-SHA256',
+            },
+          ).timeout(const Duration(seconds: 8));
+
+          final userDevJson = jsonDecode(userDevRes.body) as Map<String, dynamic>;
+          if (userDevJson['success'] == true && userDevJson['result'] is List) {
+            for (final item in userDevJson['result']) {
+              if (item is Map<String, dynamic>) {
+                rawDevices.add(Map<String, dynamic>.from(item));
+              }
+            }
+          }
+        } catch (_) {
+          // Gracefully fall back if user endpoint is restricted
+        }
+      }
+
+      if (rawDevices.isEmpty) {
+        rawDevices.add(sampleResult);
+      }
+
+      // Step D: Ensure unmasked 16-character localKey for each device
+      final List<Map<String, dynamic>> enrichedDevices = [];
+      for (final dev in rawDevices) {
+        final devId = dev['id']?.toString() ?? '';
+        if (devId.isEmpty) continue;
+
+        String localKey = dev['local_key']?.toString() ?? '';
+        // If localKey is missing, omitted, or masked (e.g. contains '*'), query /v1.0/devices/$devId
+        if ((localKey.length != 16 || localKey.contains('*')) && devId != sampleDeviceId) {
+          try {
+            final singlePath = '/v1.0/devices/$devId';
+            final tSingle = DateTime.now().millisecondsSinceEpoch.toString();
+            final singleSign = _signTuyaRequest(
+              accessId,
+              accessSecret,
+              tSingle,
+              'GET',
+              singlePath,
+              '',
+              accessToken: accessToken,
+            );
+
+            final singleRes = await client.get(
+              Uri.parse('$regionHost$singlePath'),
+              headers: {
+                'client_id': accessId,
+                'access_token': accessToken,
+                'sign': singleSign,
+                't': tSingle,
+                'sign_method': 'HMAC-SHA256',
+              },
+            ).timeout(const Duration(seconds: 6));
+
+            final singleJson = jsonDecode(singleRes.body) as Map<String, dynamic>;
+            if (singleJson['success'] == true && singleJson['result'] is Map<String, dynamic>) {
+              final singleResult = singleJson['result'] as Map<String, dynamic>;
+              final fetchedKey = singleResult['local_key']?.toString() ?? '';
+              if (fetchedKey.isNotEmpty) localKey = fetchedKey;
+              dev['name'] = singleResult['name'] ?? dev['name'];
+              dev['online'] = singleResult['online'] ?? dev['online'];
+            }
+          } catch (_) {}
+        } else if (devId == sampleDeviceId) {
+          localKey = sampleResult['local_key']?.toString() ?? localKey;
+        }
+
+        dev['local_key'] = localKey;
+        enrichedDevices.add(dev);
+      }
+
+      // Step E: Map known keys for local LAN discovery
+      final controller = iotController ?? RealIotController();
+      final knownKeys = <String, String>{};
+      for (final dev in enrichedDevices) {
+        final id = dev['id']?.toString() ?? '';
+        final key = dev['local_key']?.toString() ?? '';
+        if (id.isNotEmpty && key.length == 16) {
+          knownKeys[id] = key;
+        }
+      }
+
+      // Step F: Discover Local LAN IPs via UDP beacon sweep & active probe
+      final Map<String, String> resolvedLanIps = {};
+      try {
+        final discovered = await controller.discoverLocalWiproBulbs(
+          knownDeviceKeys: knownKeys,
+        );
+        for (final d in discovered) {
+          final dId = d.credentials['devId'] ?? d.id;
+          final ip = d.credentials['ip'] ?? '';
+          if (isPrivateLanIp(ip)) {
+            resolvedLanIps[dId] = ip;
+            resolvedLanIps[d.id] = ip;
+          }
+        }
+      } catch (_) {}
+
+      final List<RealSmartDevice> resultDevices = [];
+      final engine = networkEngine ?? SelfHealingNetworkEngine();
+
+      for (final dev in enrichedDevices) {
+        final devId = dev['id']?.toString() ?? '';
+        final devName = dev['name']?.toString() ?? 'Wipro Smart Bulb';
+        final localKey = dev['local_key']?.toString() ?? '';
+        final reportedIp = dev['ip']?.toString() ?? '';
+        final isOnline = dev['online'] == true;
+
+        // Discard WAN IP: only keep reportedIp if it is a private LAN IP
+        String cleanIp = isPrivateLanIp(reportedIp) ? reportedIp : '';
+        if (cleanIp.isEmpty && resolvedLanIps.containsKey(devId)) {
+          cleanIp = resolvedLanIps[devId]!;
+        }
+
+        final category = _mapTuyaCategory(dev['category']?.toString() ?? 'dj');
+
+        final credentials = <String, String>{
+          'ip': cleanIp,
+          'port': '6668',
+          'devId': devId,
+          'localKey': localKey,
+          'accessToken': accessToken,
+        };
+
+        if (cleanIp.isEmpty) {
+          credentials['isPendingLanIp'] = 'true';
+        }
+        if (localKey.length != 16) {
+          credentials['isPendingKey'] = 'true';
+        }
+
+        final device = RealSmartDevice(
+          id: devId,
+          name: devName,
+          room: 'Living Room',
+          category: category,
+          protocol: cleanIp.isNotEmpty
+              ? ConnectionProtocol.tuyaLocalLan
+              : ConnectionProtocol.tuyaCloudDirect,
+          credentials: credentials,
+          isOn: isOnline,
+          isOnline: isOnline,
+          primaryValue: 80.0,
+          ratedMaxWatts: 9.0,
+        );
+
+        // If LAN IP is still missing and localKey is valid, attempt healDeviceIpAddress
+        if (cleanIp.isEmpty && localKey.length == 16) {
+          try {
+            final healed = await engine.healDeviceIpAddress(device);
+            if (healed != null && isPrivateLanIp(healed)) {
+              device.credentials['ip'] = healed;
+              device.credentials.remove('isPendingLanIp');
+              resultDevices.add(
+                RealSmartDevice(
+                  id: device.id,
+                  name: device.name,
+                  room: device.room,
+                  category: device.category,
+                  protocol: ConnectionProtocol.tuyaLocalLan,
+                  credentials: device.credentials,
+                  isOn: device.isOn,
+                  isOnline: device.isOnline,
+                  primaryValue: device.primaryValue,
+                  ratedMaxWatts: device.ratedMaxWatts,
+                ),
+              );
+              continue;
+            }
+          } catch (_) {}
+        }
+
+        resultDevices.add(device);
+      }
+
+      return resultDevices;
+    } finally {
+      if (shouldCloseClient) {
+        client.close();
+      }
+    }
+  }
+
+  String _mapTuyaCategory(String category) {
+    final cat = category.toLowerCase();
+    if (cat == 'dj' || cat.contains('light')) return 'light';
+    if (cat == 'cz' || cat.contains('socket') || cat.contains('plug')) return 'plug';
+    if (cat == 'kg' || cat.contains('switch')) return 'switch';
+    if (cat == 'kt' || cat.contains('climate') || cat.contains('ac')) return 'ac';
+    return 'light';
   }
 
   String _signTuyaRequest(

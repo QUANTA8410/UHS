@@ -1366,6 +1366,8 @@ class RealHomeProvider extends ChangeNotifier {
         accessId: accessId,
         accessSecret: accessSecret,
         sampleDeviceId: sampleDeviceId,
+        iotController: _controller,
+        networkEngine: networkEngine,
       );
       for (final d in found) {
         _devices.removeWhere((existing) => existing.id == d.id);
