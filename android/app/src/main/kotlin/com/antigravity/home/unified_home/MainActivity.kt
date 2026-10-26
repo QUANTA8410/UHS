@@ -33,6 +33,7 @@ class MainActivity : FlutterActivity() {
     private val LIVE_CHANNEL_ID = "unified_home_live_appliance"
     private val ALERT_CHANNEL_ID = "unified_home_appliance_alerts"
     private var masterMethodChannel: MethodChannel? = null
+    private var initialDeepLink: String? = null
     private var nodeWakeLock: PowerManager.WakeLock? = null
     private var nodeWifiLock: WifiManager.WifiLock? = null
 
@@ -103,28 +104,16 @@ class MainActivity : FlutterActivity() {
                         .setPriority(NotificationCompat.PRIORITY_HIGH)
                         .setAutoCancel(true)
 
-                    if (withChime) {
-                        builder.setSound(soundUri)
-                        try {
-                            val ringtone = RingtoneManager.getRingtone(applicationContext, soundUri)
-                            ringtone?.play()
-                        } catch (_: Exception) {}
-                    }
-
-                    if (withVibration) {
-                        builder.setVibrate(longArrayOf(0, 300, 200, 300))
-                        try {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                                vibrator?.vibrate(
-                                    VibrationEffect.createWaveform(longArrayOf(0, 300, 200, 300), -1)
-                                )
-                            } else {
-                                @Suppress("DEPRECATION")
-                                val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                                vibrator?.vibrate(longArrayOf(0, 300, 200, 300), -1)
-                            }
-                        } catch (_: Exception) {}
+                    // On pre-Oreo devices, channel-based audio/vibration does not exist,
+                    // so apply directly to NotificationCompat.Builder. On Android O+, ALERT_CHANNEL_ID
+                    // natively plays chime and vibrates without duplicate manual playback.
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                        if (withChime) {
+                            builder.setSound(soundUri)
+                        }
+                        if (withVibration) {
+                            builder.setVibrate(longArrayOf(0, 300, 200, 300))
+                        }
                     }
 
                     manager.notify(notificationId, builder.build())
@@ -132,6 +121,13 @@ class MainActivity : FlutterActivity() {
                 }
                 "enableNodeKeepAlive" -> {
                     try {
+                        val serviceIntent = Intent(this, NodeServerForegroundService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(serviceIntent)
+                        } else {
+                            startService(serviceIntent)
+                        }
+
                         if (nodeWakeLock == null) {
                             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                             nodeWakeLock = powerManager.newWakeLock(
@@ -142,7 +138,7 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                         if (nodeWakeLock?.isHeld != true) {
-                            nodeWakeLock?.acquire(24 * 60 * 60 * 1000L)
+                            nodeWakeLock?.acquire() // Indefinite 24/7 keep-alive without 24-hr timeout
                         }
 
                         if (nodeWifiLock == null) {
@@ -180,6 +176,11 @@ class MainActivity : FlutterActivity() {
                 }
                 "disableNodeKeepAlive" -> {
                     try {
+                        val serviceIntent = Intent(this, NodeServerForegroundService::class.java)
+                        stopService(serviceIntent)
+                    } catch (_: Exception) {}
+
+                    try {
                         if (nodeWakeLock?.isHeld == true) {
                             nodeWakeLock?.release()
                         }
@@ -195,8 +196,8 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "getNodeKeepAliveStatus" -> {
-                    val isWake = nodeWakeLock?.isHeld == true
-                    val isWifi = nodeWifiLock?.isHeld == true
+                    val isWake = NodeServerForegroundService.isWakeLockHeld || nodeWakeLock?.isHeld == true
+                    val isWifi = NodeServerForegroundService.isWifiLockHeld || nodeWifiLock?.isHeld == true
                     var isBatteryIgnored = false
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -206,7 +207,8 @@ class MainActivity : FlutterActivity() {
                         mapOf(
                             "wakeLock" to isWake,
                             "wifiLock" to isWifi,
-                            "batteryOptimizationIgnored" to isBatteryIgnored
+                            "batteryOptimizationIgnored" to isBatteryIgnored,
+                            "isForegroundServiceRunning" to NodeServerForegroundService.isServiceRunning
                         )
                     )
                 }
@@ -282,6 +284,11 @@ class MainActivity : FlutterActivity() {
         masterMethodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MASTER_OS_CHANNEL)
         masterMethodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
+                "getInitialDeepLink" -> {
+                    val link = initialDeepLink
+                    initialDeepLink = null // Consume once
+                    result.success(link)
+                }
                 "updateLiveNotification" -> {
                     val title = call.argument<String>("title") ?: "Appliance Active"
                     val subtitle = call.argument<String>("subtitle") ?: "Running..."
@@ -339,6 +346,7 @@ class MainActivity : FlutterActivity() {
     private fun handleIncomingIntent(intent: Intent?) {
         val data = intent?.dataString
         if (!data.isNullOrEmpty()) {
+            initialDeepLink = data
             masterMethodChannel?.invokeMethod("onDeepLink", data)
         }
     }

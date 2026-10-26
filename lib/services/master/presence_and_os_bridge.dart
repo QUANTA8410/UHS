@@ -22,6 +22,22 @@ class PresenceAndOsBridge {
         onIncomingPhoneCallDetected();
       }
     });
+
+    // Query any cold-start initial deep link cached before listener registration
+    getInitialDeepLink().then((initialUri) {
+      if (initialUri != null && initialUri.isNotEmpty) {
+        onNfcOrDeepLinkTriggered(initialUri);
+      }
+    });
+  }
+
+  /// Retrieves and clears any initial deep link that cold-started the Android Activity
+  Future<String?> getInitialDeepLink() async {
+    try {
+      return await _osChannel.invokeMethod<String>('getInitialDeepLink');
+    } catch (_) {
+      return null;
+    }
   }
 
   // ---------------------------------------------------------------------------
