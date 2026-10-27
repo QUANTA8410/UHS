@@ -112,7 +112,10 @@ class SelfHealingNetworkEngine {
   // ---------------------------------------------------------------------------
   // PILLAR 6A: SELF-HEALING DHCP IP RESOLVER (AUTO-SWEEPS SUBNET ON TIMEOUT)
   // ---------------------------------------------------------------------------
-  Future<String?> healDeviceIpAddress(RealSmartDevice device) async {
+  Future<String?> healDeviceIpAddress(
+    RealSmartDevice device, {
+    Future<bool> Function(String candidateIp, Socket socket)? verifyDevice,
+  }) async {
     final targetPort = int.tryParse(
           device.credentials['port'] ??
               (device.protocol == ConnectionProtocol.tuyaLocalLan ? '6668' : '8008'),
@@ -170,31 +173,46 @@ class SelfHealingNetworkEngine {
       subnetPrefix = currentIp.substring(0, currentIp.lastIndexOf('.'));
     }
 
-    final completer = Completer<String?>();
-    int remaining = 254;
+    // Bug 37: Scan subnet in bounded chunks of 25 sockets (chunkSize = 25) with try / finally { socket.destroy() }
+    // and verify device identity before overwriting device.credentials['ip']
+    const int chunkSize = 25;
     final connectFn = _socketConnect ?? Socket.connect;
+    final candidateHosts = List.generate(254, (i) => '$subnetPrefix.${i + 1}');
 
-    for (int i = 1; i <= 254; i++) {
-      final candidateIp = '$subnetPrefix.$i';
-      connectFn(candidateIp, targetPort, timeout: const Duration(milliseconds: 260))
-          .then((socket) {
+    for (int i = 0; i < candidateHosts.length; i += chunkSize) {
+      final chunk = candidateHosts.sublist(
+        i,
+        (i + chunkSize > candidateHosts.length) ? candidateHosts.length : i + chunkSize,
+      );
+
+      final futures = chunk.map((candidateIp) async {
+        Socket? socket;
         try {
-          socket.destroy();
-        } catch (_) {}
-        if (!completer.isCompleted) {
-          device.credentials['ip'] = candidateIp;
-          device.credentials.remove('isPendingLanIp');
-          completer.complete(candidateIp);
-        }
-      }).catchError((_) {}).whenComplete(() {
-        remaining--;
-        if (remaining == 0 && !completer.isCompleted) {
-          completer.complete(null);
+          socket = await connectFn(candidateIp, targetPort, timeout: const Duration(milliseconds: 260));
+          if (verifyDevice != null) {
+            final isValid = await verifyDevice(candidateIp, socket);
+            if (!isValid) return null;
+          }
+          return candidateIp;
+        } catch (_) {
+          return null;
+        } finally {
+          try {
+            socket?.destroy();
+          } catch (_) {}
         }
       });
+
+      final results = await Future.wait(futures);
+      final foundIp = results.firstWhere((ip) => ip != null, orElse: () => null);
+      if (foundIp != null) {
+        device.credentials['ip'] = foundIp;
+        device.credentials.remove('isPendingLanIp');
+        return foundIp;
+      }
     }
 
-    return completer.future;
+    return null;
   }
 
   // ---------------------------------------------------------------------------

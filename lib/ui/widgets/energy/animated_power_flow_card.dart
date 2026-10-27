@@ -15,7 +15,6 @@ class AnimatedPowerFlowCard extends StatefulWidget {
 class _AnimatedPowerFlowCardState extends State<AnimatedPowerFlowCard>
     with SingleTickerProviderStateMixin {
   late final AnimationController _flowCtrl;
-  final RealIotController _iot = RealIotController();
   bool _aiEcoMode = true;
 
   @override
@@ -33,10 +32,11 @@ class _AnimatedPowerFlowCardState extends State<AnimatedPowerFlowCard>
     super.dispose();
   }
 
+  // Bug 39 fix: Read d.liveWatts directly without calling
+  // computeDeviceLiveWattage during build(), which would mutate device
+  // state (d.liveWatts, d.liveAttributes) 60 times per second.
   double _getDeviceWatts(RealSmartDevice d) {
-    if (!d.isOnline) return 0.0;
-    if (d.liveWatts > 0) return d.liveWatts;
-    return _iot.computeDeviceLiveWattage(d);
+    return d.isOnline ? d.liveWatts : 0.0;
   }
 
   double get _totalWatts =>

@@ -1860,7 +1860,14 @@ class RealHomeProvider extends ChangeNotifier {
     int pulses = 3,
     Duration pulseDuration = const Duration(milliseconds: 800),
   }) async {
-    await _controller.flashDevice(device, pulses: pulses, pulseDuration: pulseDuration);
+    if (networkEngine.isAlwaysOnNodeConnected && !osBridge.isUserAtHome) {
+      networkEngine.relayCommandToAlwaysOnNode({
+        'action': 'flash',
+        'deviceId': device.id,
+      });
+    } else {
+      await _controller.flashDevice(device, pulses: pulses, pulseDuration: pulseDuration);
+    }
     await _saveState();
     notifyListeners();
   }
@@ -1874,7 +1881,18 @@ class RealHomeProvider extends ChangeNotifier {
   ]) async {
     lastGlobalError = null;
     try {
-      await _controller.executeDeviceCommand(device, capability, command, arguments, component);
+      if (networkEngine.isAlwaysOnNodeConnected && !osBridge.isUserAtHome) {
+        networkEngine.relayCommandToAlwaysOnNode({
+          'action': 'command',
+          'deviceId': device.id,
+          'capability': capability,
+          'command': command,
+          'arguments': arguments,
+          if (component != null) 'component': component,
+        });
+      } else {
+        await _controller.executeDeviceCommand(device, capability, command, arguments, component);
+      }
       await _saveState();
       notifyListeners();
     } catch (e) {
@@ -1904,7 +1922,15 @@ class RealHomeProvider extends ChangeNotifier {
     }
 
     try {
-      await _controller.setPower(device, targetState);
+      if (networkEngine.isAlwaysOnNodeConnected && !osBridge.isUserAtHome) {
+        networkEngine.relayCommandToAlwaysOnNode({
+          'action': 'toggle',
+          'deviceId': device.id,
+          'targetState': targetState,
+        });
+      } else {
+        await _controller.setPower(device, targetState);
+      }
       device.markOnlineSuccess();
     } catch (e) {
       // Revert on network/controller failure
@@ -1988,7 +2014,15 @@ class RealHomeProvider extends ChangeNotifier {
     _levelDebounceTimers[device.id]?.cancel();
     _levelDebounceTimers[device.id] = Timer(const Duration(milliseconds: 250), () async {
       try {
-        await _controller.setPrimaryLevel(device, newValue);
+        if (networkEngine.isAlwaysOnNodeConnected && !osBridge.isUserAtHome) {
+          networkEngine.relayCommandToAlwaysOnNode({
+            'action': 'level',
+            'deviceId': device.id,
+            'value': newValue,
+          });
+        } else {
+          await _controller.setPrimaryLevel(device, newValue);
+        }
         device.markOnlineSuccess();
         await _saveState();
       } catch (e) {

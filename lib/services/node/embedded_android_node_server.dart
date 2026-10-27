@@ -246,7 +246,7 @@ class EmbeddedAndroidNodeServer extends ChangeNotifier {
 
     try {
       // 1. WebSocket Endpoint
-      if (path == '/api/ws') {
+      if (path == '/api/ws' || path == '/ws') {
         if (WebSocketTransformer.isUpgradeRequest(request)) {
           final ws = await WebSocketTransformer.upgrade(request);
           _wsClients.add(ws);
@@ -404,7 +404,7 @@ class EmbeddedAndroidNodeServer extends ChangeNotifier {
     }
   }
 
-  void _handleWebSocketMessage(WebSocket ws, dynamic data) {
+  Future<void> _handleWebSocketMessage(WebSocket ws, dynamic data) async {
     try {
       final msg = jsonDecode(data.toString());
       if (msg is Map && msg.containsKey('action')) {
@@ -412,19 +412,20 @@ class EmbeddedAndroidNodeServer extends ChangeNotifier {
         final devId = msg['deviceId']?.toString();
 
         if (devId != null && _homeProvider != null) {
-          final dev = _homeProvider!.devices.firstWhere((d) => d.id == devId);
+          final dev = _homeProvider!.devices.where((d) => d.id == devId).firstOrNull;
+          if (dev == null) return;
           if (action == 'toggle') {
-            _homeProvider!.toggleDevicePower(dev);
+            await _homeProvider!.toggleDevicePower(dev);
           } else if (action == 'level') {
             final val = (msg['value'] as num).toDouble();
-            _homeProvider!.setDeviceLevel(dev, val);
+            await _homeProvider!.setDeviceLevel(dev, val);
           } else if (action == 'flash') {
-            _homeProvider!.flashDevice(dev);
+            await _homeProvider!.flashDevice(dev);
           }
         }
       }
     } catch (e) {
-      _log('WebSocket message parse error: $e');
+      _log('WebSocket message execution error: $e');
     }
   }
 

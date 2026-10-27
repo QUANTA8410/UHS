@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:network_info_plus/network_info_plus.dart';
 import 'master/zero_touch_onboarding_service.dart';
 import 'tv/oneplus_connect_service.dart';
+import 'wipro/wipro_tuya_service.dart';
 
 enum ConnectionProtocol {
   smartThingsCloud,
@@ -434,9 +435,17 @@ class RealIotController {
   static const String _stBase = 'https://api.smartthings.com/v1';
   final http.Client? client;
   final Future<Socket> Function(dynamic host, int port, {Duration? timeout})? socketConnector;
+  final WiproTuyaService wiproTuyaService;
+  final OnePlusConnectService onePlusConnectService;
   final Map<String, Future<void>> _tuyaLanLocks = {};
 
-  RealIotController({this.client, this.socketConnector});
+  RealIotController({
+    this.client,
+    this.socketConnector,
+    WiproTuyaService? wiproTuyaService,
+    OnePlusConnectService? onePlusConnectService,
+  })  : wiproTuyaService = wiproTuyaService ?? WiproTuyaService(socketConnector: socketConnector),
+        onePlusConnectService = onePlusConnectService ?? OnePlusConnectService(client: client);
 
   /// Serializes socket connections on port 6668 per device IP to prevent
   /// socket contention on single-connection ESP8266/BK7231 microcontrollers (Bug 9).
@@ -1946,7 +1955,13 @@ class RealIotController {
         final token = device.credentials['accessToken'] ?? device.credentials['token'];
         if (localKey.length == 16) {
           final version = device.credentials['version'] ?? '3.3';
-          await _sendTuyaEncryptedFrame(ip, devId, localKey, {'20': turnOn}, version: version);
+          await _withTuyaLanLock(ip, () => wiproTuyaService.setPower(
+            host: ip,
+            cloudDeviceId: devId,
+            localKey: localKey,
+            isPowered: turnOn,
+            version: version,
+          ));
           device.isOn = turnOn;
         } else if (token != null && token.trim().length > 5 && !token.toLowerCase().contains('demo')) {
           final res = await _post(
@@ -1976,13 +1991,12 @@ class RealIotController {
 
       case ConnectionProtocol.onePlusTvLan:
         final ip = _requireCredential(device, 'ip');
-        final onePlus = OnePlusConnectService(client: client);
 
         if (turnOn) {
           // 1. Broadcast Wake-on-LAN if MAC address is provided in credentials (Bug 10)
           final mac = device.credentials['mac'] ?? device.credentials['macAddress'];
           if (mac != null && mac.isNotEmpty) {
-            await onePlus.sendWakeOnLan(mac);
+            await onePlusConnectService.sendWakeOnLan(mac);
           }
 
           // 2. Trigger wake / DIAL YouTube launch over port 8008
@@ -1990,7 +2004,7 @@ class RealIotController {
           final res = await _post(uri).timeout(const Duration(seconds: 4));
           if (res.statusCode >= 400) {
             // Fallback to sending POWER key if DIAL launch returns error
-            final sent = await onePlus.sendRemoteKey(tvId: device.id, keyAction: 'POWER', host: ip);
+            final sent = await onePlusConnectService.sendRemoteKey(tvId: device.id, keyAction: 'POWER', host: ip);
             if (!sent) {
               throw Exception('OnePlus TV DIAL HTTP ${res.statusCode}');
             }
@@ -2000,7 +2014,7 @@ class RealIotController {
           final uri = Uri.parse('http://$ip:8008/apps/YouTube/run');
           final res = await _delete(uri).timeout(const Duration(seconds: 4));
           // Send POWER key to put Android TV panel into standby
-          await onePlus.sendRemoteKey(tvId: device.id, keyAction: 'POWER', host: ip);
+          await onePlusConnectService.sendRemoteKey(tvId: device.id, keyAction: 'POWER', host: ip);
           if (res.statusCode >= 400 && res.statusCode != 404) {
             throw Exception('OnePlus TV DIAL HTTP ${res.statusCode}');
           }
@@ -2135,29 +2149,72 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.tuyaLocalLan:
-        Map<String, dynamic> dps = {};
-        if (arguments.isNotEmpty && arguments.first is Map) {
-          dps = Map<String, dynamic>.from(arguments.first as Map);
-        } else {
-          dps = {command: arguments.isNotEmpty ? arguments.first : true};
-        }
-        await sendTuyaLocalDps(device, dps);
+        final ip = _requireCredential(device, 'ip');
+        final localKey = device.credentials['localKey'] ?? '';
+        final version = device.credentials['version'] ?? '3.3';
+        await _withTuyaLanLock(ip, () async {
+          if (command == 'setBrightness' && arguments.isNotEmpty) {
+            final bri = (arguments.first as num).toDouble();
+            await wiproTuyaService.setBrightness(
+              host: ip,
+              cloudDeviceId: device.id,
+              localKey: localKey,
+              brightness: bri / 100.0,
+              version: version,
+            );
+          } else if (command == 'setColorTemp' && arguments.isNotEmpty) {
+            final kelvin = (arguments.first as num).round();
+            await wiproTuyaService.setColorTemp(
+              host: ip,
+              cloudDeviceId: device.id,
+              localKey: localKey,
+              kelvin: kelvin,
+              version: version,
+            );
+          } else if (command == 'setColorHex' && arguments.isNotEmpty) {
+            await wiproTuyaService.setColorHex(
+              host: ip,
+              cloudDeviceId: device.id,
+              localKey: localKey,
+              hexRgb: arguments.first.toString(),
+              version: version,
+            );
+          } else if (arguments.isNotEmpty && arguments.first is Map) {
+            await wiproTuyaService.sendEncryptedFrame(
+              host: ip,
+              deviceId: device.id,
+              localKey: localKey,
+              dps: Map<String, dynamic>.from(arguments.first as Map),
+              version: version,
+            );
+          } else {
+            await wiproTuyaService.setPower(
+              host: ip,
+              cloudDeviceId: device.id,
+              localKey: localKey,
+              isPowered: command == 'turnOn' || command == 'on',
+              version: version,
+            );
+          }
+        });
         break;
 
       case ConnectionProtocol.onePlusTvLan:
         final ip = _requireCredential(device, 'ip');
-        final onePlus = OnePlusConnectService(client: client);
-        if (command == 'launchApp' && arguments.isNotEmpty) {
-          await onePlus.launchApp(tvId: device.id, appName: arguments.first.toString(), host: ip);
+        if (command == 'key' || command == 'sendKey' || command == 'sendRemoteKey') {
+          final key = arguments.isNotEmpty ? arguments.first.toString() : 'SELECT';
+          await onePlusConnectService.sendRemoteKey(tvId: device.id, keyAction: key, host: ip);
+        } else if (command == 'launchApp' && arguments.isNotEmpty) {
+          await onePlusConnectService.launchApp(tvId: device.id, appName: arguments.first.toString(), host: ip);
         } else if (command == 'terminateApp' && arguments.isNotEmpty) {
-          await onePlus.terminateApp(tvId: device.id, appName: arguments.first.toString(), host: ip);
+          await onePlusConnectService.terminateApp(tvId: device.id, appName: arguments.first.toString(), host: ip);
         } else if (command == 'switchInput' && arguments.isNotEmpty) {
-          await onePlus.switchInput(tvId: device.id, inputSource: arguments.first.toString(), host: ip);
-        } else if (command == 'sendKey' || command == 'setVolume' || command == 'volume') {
-          final keyAction = arguments.isNotEmpty ? arguments.first.toString() : 'SELECT';
-          await onePlus.sendRemoteKey(tvId: device.id, keyAction: keyAction, host: ip);
+          await onePlusConnectService.switchInput(tvId: device.id, inputSource: arguments.first.toString(), host: ip);
+        } else if (command == 'wakeOnLan') {
+          final mac = device.credentials['mac'] ?? device.credentials['macAddress'] ?? '';
+          await onePlusConnectService.sendWakeOnLan(mac);
         } else {
-          await onePlus.sendRemoteKey(tvId: device.id, keyAction: command, host: ip);
+          await onePlusConnectService.sendRemoteKey(tvId: device.id, keyAction: command, host: ip);
         }
         break;
 
@@ -2509,14 +2566,13 @@ class RealIotController {
         final token = device.credentials['accessToken'] ?? device.credentials['token'];
         if (localKey.length == 16) {
           final version = device.credentials['version'] ?? '3.3';
-          // Tuya DPS 22 is brightness (10 to 1000)
-          await _sendTuyaEncryptedFrame(
-            ip,
-            device.id,
-            localKey,
-            {'20': true, '22': (value * 10).round().clamp(10, 1000)},
+          await _withTuyaLanLock(ip, () => wiproTuyaService.setBrightness(
+            host: ip,
+            cloudDeviceId: device.id,
+            localKey: localKey,
+            brightness: value / 100.0,
             version: version,
-          );
+          ));
           device.primaryValue = value;
         } else if (token != null && token.trim().length > 5 && !token.toLowerCase().contains('demo')) {
           final clamped = value.round().clamp(1, 100);
@@ -2605,19 +2661,41 @@ class RealIotController {
         break;
 
       case ConnectionProtocol.customHttpWebhook:
-        if (device.isLgThinq) {
-          await _dispatchLgPrimaryLevel(device, value);
+        final vendor = device.credentials['vendor']?.toString().toLowerCase();
+        if (device.isLgThinq || vendor == 'lg_thinq' || vendor == 'lg') {
+          if (device.category == 'ac') {
+            final clamped = value.clamp(16.0, 30.0);
+            await ZeroTouchOnboardingService.instance.controlLgAirConditioner(
+              device: device,
+              powerOn: device.isOn,
+              targetCelsius: clamped,
+            );
+          } else {
+            await _dispatchLgPrimaryLevel(device, value);
+          }
+          device.primaryValue = value;
           break;
         }
         device.primaryValue = value;
         break;
 
+      case ConnectionProtocol.onePlusTvLan:
+        final ip = _requireCredential(device, 'ip');
+        final currentVol = device.primaryValue.round();
+        final targetVol = value.round().clamp(0, 100);
+        final diff = targetVol - currentVol;
+        if (diff != 0) {
+          final action = diff > 0 ? 'VOL_UP' : 'VOL_DOWN';
+          for (int i = 0; i < diff.abs() && i < 15; i++) {
+            await onePlusConnectService.sendRemoteKey(tvId: device.id, keyAction: action, host: ip);
+          }
+        }
+        device.primaryValue = targetVol.toDouble();
+        break;
+
       case ConnectionProtocol.rtspOnvifCamera:
         device.primaryValue = value;
         break;
-
-      default:
-        device.primaryValue = value;
     }
     device.markOnlineSuccess();
     computeDeviceLiveWattage(device);
